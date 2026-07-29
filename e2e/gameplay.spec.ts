@@ -30,8 +30,14 @@ test('lane input, traffic, scoring, speed ramp, collision and restart', async ({
 }) => {
   const consoleErrors = await boot(page);
 
-  // start() -> playing.
-  await page.evaluate(() => window.__GARY__?.start());
+  // Lane input is inert on the menu, before a run has started.
+  await page.keyboard.press('ArrowRight');
+  expect(await page.evaluate(() => window.__GARY__?.state)).toBe('menu');
+  expect(await page.evaluate(() => window.__GARY__?.lane)).toBe(1);
+
+  // Start through the real button so this also exercises the user-gesture audio
+  // unlock path before later cue-triggering actions.
+  await page.locator('#startBtn').click();
   await expect
     .poll(() => page.evaluate(() => window.__GARY__?.state))
     .toBe('playing');
