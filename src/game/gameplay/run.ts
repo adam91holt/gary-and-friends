@@ -5,21 +5,29 @@
  * entire core loop is exercised in Vitest at whatever timestep the test likes.
  *
  * The renderer (src/main.ts) does exactly two things with this: calls
- * `update(dt)` once a frame, and reads `traffic.entities` to place meshes. It
- * never decides anything.
+ * `update(dt)` once a frame, and reads `traffic.entities` / `friends.entities`
+ * / `conga.members` to place meshes. It never decides anything.
  *
- * Ticket 03 hooks in here: add a second `EntityField` for friends beside
- * `traffic`, tick it in `update()`, and resolve it with the same `findHit`
- * helper — `store.addFriends()` on a hit instead of `store.gameOver()`.
+ * Two entity fields ride the same pool abstraction and the same swept collision
+ * predicate — only the `kind` and the consequence differ: a vehicle ends the
+ * run, a friend joins the conga line behind Gary.
  */
 import { LANE_WIDTH, laneToX } from '../entities/lanes.ts';
 import { findHit, type Collider } from '../entities/collision.ts';
 import type { EntityField } from '../entities/field.ts';
 import {
+  createFriendField,
+  FRIEND_KIND,
+  friendScore,
+  friendSpec,
+} from '../entities/friends.ts';
+import {
   createTrafficField,
   TRAFFIC_KIND,
   TRAFFIC_VARIANTS,
 } from '../entities/traffic.ts';
+import { CongaLine } from '../friends/conga.ts';
+import { FRIEND_COUNT, friendProfile } from '../friends/roster.ts';
 import { LANE_COUNT, type GameStore } from '../state.ts';
 import { scoreForDistance, speedForDistance } from './difficulty.ts';
 
@@ -54,6 +62,25 @@ export const NEAR_MISS_BONUS = 25;
  */
 export const NEAR_MISS_WINDOW = 8;
 
+/**
+ * Where `__spawnFriend()` drops its friend: close enough that a test collects
+ * within a frame or two at any speed, far enough that the cone is genuinely
+ * visible arriving (so the e2e screenshot shows a pickup, not a teleport).
+ */
+export const TEST_FRIEND_SPAWN_Z = -12;
+
+/** What the renderer is told about a friend the moment Gary collects them. */
+export interface FriendPickup {
+  /** Roster index (see ../friends/roster.ts). */
+  readonly variant: number;
+  /** The friend's name, for the HUD flourish. */
+  readonly name: string;
+  /** Points this pickup was worth (base + convoy bonus). */
+  readonly points: number;
+  /** How long the conga line is now, including this arrival. */
+  readonly total: number;
+}
+
 export interface RunOptions {
   /** Seed for traffic spawning. Fixed seed => byte-identical run. */
   seed?: number;
@@ -62,11 +89,22 @@ export interface RunOptions {
    * feedback (whoosh + HUD flash); the simulation stays presentation-free.
    */
   onNearMiss?: () => void;
+  /**
+   * Called when Gary picks a friend up. Same contract as `onNearMiss`: the
+   * simulation reports *what happened*, the renderer decides how it feels.
+   */
+  onFriend?: (pickup: FriendPickup) => void;
 }
 
 export class Run {
   /** The traffic pool. Read by the renderer to place meshes; owned here. */
   readonly traffic: EntityField;
+
+  /** The collectible-friend pool. Same abstraction, different consequence. */
+  readonly friends: EntityField;
+
+  /** The tail of collected friends trailing Gary. Placed by the renderer. */
+  readonly conga = new CongaLine();
 
   /** World units travelled this run. Drives both score and the speed ramp. */
   private distance = 0;
@@ -77,17 +115,28 @@ export class Run {
   private garyX: number;
   private readonly collider: Collider;
   private readonly onNearMiss: (() => void) | null;
+  private readonly onFriend: ((pickup: FriendPickup) => void) | null;
   /** Tightest gap seen so far per approaching entity id. */
   private readonly closest = new Map<number, number>();
   /** Near misses credited this run. */
   private nearMissCount = 0;
+  /**
+   * Rotates the roster for the deterministic `__spawnFriend()` hook, so an e2e
+   * test that collects five in a row meets five different characters rather
+   * than five Tinys.
+   */
+  private injectCursor = 0;
 
   constructor(
     private readonly store: GameStore,
     options: RunOptions = {},
   ) {
     this.onNearMiss = options.onNearMiss ?? null;
+    this.onFriend = options.onFriend ?? null;
     this.traffic = createTrafficField(options.seed ?? 1337);
+    // Offset seed: friends and traffic must not draw the same lane sequence,
+    // or every friend would materialise in lockstep with a vehicle.
+    this.friends = createFriendField((options.seed ?? 1337) * 7 + 11);
     this.garyX = laneToX(store.getState().lane);
     this.collider = {
       x: this.garyX,
@@ -115,10 +164,13 @@ export class Run {
    */
   reset(): void {
     this.traffic.clear();
+    this.friends.clear();
+    this.conga.clear();
     this.closest.clear();
     this.distance = 0;
     this.bonus = 0;
     this.nearMissCount = 0;
+    this.injectCursor = 0;
     this.grace = SPAWN_GRACE;
     this.garyX = laneToX(this.store.getState().lane);
     this.collider.x = this.garyX;
@@ -153,16 +205,30 @@ export class Run {
     const delta = target - state.score;
     if (delta > 0) this.store.addScore(delta);
 
-    // 3. Move + recycle + spawn traffic at the *new* speed.
-    this.traffic.update(dt, this.store.getState().speed);
+    // 3. Move + recycle + spawn both fields at the *new* speed. Traffic is
+    //    passed to the friend field as external occupancy, so a friend is never
+    //    dropped inside a car — the reward can't be a trap.
+    const speed = this.store.getState().speed;
+    this.traffic.update(dt, speed);
+    this.friends.update(dt, speed, this.traffic.entities);
 
-    // 4. Resolve collisions.
+    // 4. Drag the conga line along Gary's path. Done every tick (not only on a
+    //    pickup) so the tail keeps flowing through lane changes.
+    this.conga.advance(dt, speed * dt, this.garyX);
+
+    this.collider.x = this.garyX;
+    this.collider.lane = this.store.getState().lane;
+
+    // 5. Collect friends. Deliberately OUTSIDE the grace window: grace exists
+    //    so a restart can't drop the player into a car, and there is no reason
+    //    a reward should be unavailable for the first third of a second.
+    this.collectFriends();
+
+    // 6. Resolve collisions.
     if (this.grace > 0) {
       this.grace -= dt;
       return;
     }
-    this.collider.x = this.garyX;
-    this.collider.lane = this.store.getState().lane;
     const hit = findHit(
       this.traffic.entities,
       this.collider,
@@ -226,6 +292,75 @@ export class Run {
       this.store.addScore(NEAR_MISS_BONUS);
       this.onNearMiss?.();
     }
+  }
+
+  /**
+   * Pick up every friend overlapping Gary this tick, through the exact same
+   * swept predicate that flattens him against a truck. Only the consequence
+   * differs: the cone leaves the field and joins the tail instead of ending
+   * the run.
+   *
+   * Loops until clear rather than collecting one per frame — two friends can
+   * legitimately overlap Gary in the same tick at top speed, and silently
+   * dropping one would be a bug the player would feel and never be able to
+   * describe.
+   */
+  private collectFriends(): void {
+    for (;;) {
+      const found = findHit(
+        this.friends.entities,
+        this.collider,
+        FRIEND_KIND,
+        laneToX,
+      );
+      if (found === null) return;
+
+      this.friends.despawn(found);
+      const profile = friendProfile(found.variant);
+      // Convoy bonus reads the line BEFORE this arrival, so the first friend
+      // is worth the base and each subsequent one is worth more.
+      const points = friendScore(this.conga.length);
+      this.conga.join(found.variant, profile.name);
+
+      // Banked as bonus (not distance) so the speed ramp stays a pure function
+      // of road travelled — collecting friends scores faster, it never
+      // secretly makes the game harder.
+      this.bonus += points;
+      this.store.addScore(points);
+      this.store.addFriends();
+      this.onFriend?.({
+        variant: found.variant,
+        name: profile.name,
+        points,
+        total: this.conga.length,
+      });
+    }
+  }
+
+  /**
+   * Deterministic hook behind `__spawnFriend()`: place a friend directly in
+   * Gary's lane, just far enough ahead to be seen arriving.
+   *
+   * It bypasses the cadence and the RNG entirely (so a test never waits on a
+   * random beat) but goes through the normal field + collision path, so
+   * collecting one exercises the real pickup rule rather than poking the store.
+   * The roster cycles per call: five hook calls introduce five characters.
+   */
+  spawnFriend(): number | null {
+    if (this.store.getState().status !== 'playing') return null;
+
+    const variant = this.injectCursor % FRIEND_COUNT;
+    // Guarantee a slot even at capacity — the hook owns what it injects.
+    if (this.friends.activeCount === this.friends.entities.length) {
+      const first = this.friends.entities.find((entity) => entity.active);
+      if (first) this.friends.despawn(first);
+    }
+    const injected = this.friends.inject(
+      friendSpec(this.store.getState().lane, variant, TEST_FRIEND_SPAWN_Z),
+    );
+    if (injected === null) return null;
+    this.injectCursor++;
+    return variant;
   }
 
   /**

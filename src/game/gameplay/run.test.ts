@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest';
+import {
+  FRIEND_BASE_SCORE,
+  FRIEND_CAPACITY,
+  FRIEND_KIND,
+  friendSpec,
+} from '../entities/friends.ts';
 import { laneToX } from '../entities/lanes.ts';
 import { TRAFFIC_KIND } from '../entities/traffic.ts';
+import { FRIEND_COUNT } from '../friends/roster.ts';
 import { BASE_SPEED, CENTER_LANE, GameStore } from '../state.ts';
 import { MAX_SPEED, scoreForDistance } from './difficulty.ts';
-import { GARY_Z, NEAR_MISS_BONUS, Run, SPAWN_GRACE } from './run.ts';
+import {
+  GARY_Z,
+  NEAR_MISS_BONUS,
+  Run,
+  SPAWN_GRACE,
+  TEST_FRIEND_SPAWN_Z,
+  type FriendPickup,
+} from './run.ts';
 
 /** Advance a run in realistic 60fps slices. */
 function tick(run: Run, seconds: number, step = 1 / 60): void {
@@ -409,5 +423,231 @@ describe('Run: near-miss bonus', () => {
     // Same elapsed time, same seed -> the ramp must be identical regardless of
     // any bonus banked, because it is a pure function of distance.
     expect(bonused.store.getState().speed).toBeCloseTo(plainSpeed, 9);
+  });
+});
+
+describe('Run: collecting friends', () => {
+  /** Park a friend exactly on Gary, by the same route a real spawn would. */
+  function friendOnGary(run: Run, store: GameStore, variant = 0): void {
+    run.friends.inject(friendSpec(store.getState().lane, variant, GARY_Z));
+  }
+
+  it('picks a friend up through the shared collision predicate', () => {
+    const { store, run } = playing();
+    friendOnGary(run, store);
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(1);
+  });
+
+  it('is collectible during the opening grace window (a reward, not a threat)', () => {
+    const store = new GameStore();
+    const run = new Run(store, { seed: 1 });
+    store.start();
+    run.reset();
+    friendOnGary(run, store);
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(1);
+    expect(store.getState().status).toBe('playing');
+  });
+
+  it('ignores a friend in another lane', () => {
+    const { store, run } = playing();
+    tick(run, SPAWN_GRACE + 0.1);
+    store.setLane(0);
+    run.setGaryX(laneToX(0));
+    run.friends.inject(friendSpec(2, 0, GARY_Z));
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(0);
+  });
+
+  it('despawns the collected friend so it cannot be counted twice', () => {
+    const { store, run } = playing();
+    friendOnGary(run, store);
+    run.update(1 / 60);
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(1);
+    expect(run.friends.activeCount).toBe(0);
+  });
+
+  it('bumps the score by the base value on the first pickup', () => {
+    const { store, run } = playing();
+    const before = store.getState().score;
+    friendOnGary(run, store);
+    run.update(1 / 60);
+    expect(store.getState().score - before).toBeGreaterThanOrEqual(
+      FRIEND_BASE_SCORE,
+    );
+  });
+
+  it('pays a growing convoy bonus as the line gets longer', () => {
+    const { store, run } = playing();
+    const gains: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const before = store.getState().score;
+      friendOnGary(run, store, i);
+      run.update(1 / 60);
+      gains.push(store.getState().score - before);
+    }
+    expect(store.getState().friends).toBe(4);
+    for (let i = 1; i < gains.length; i++) {
+      expect(gains[i]).toBeGreaterThan(gains[i - 1]);
+    }
+  });
+
+  it('collects two friends landing on Gary in the same tick', () => {
+    const { store, run } = playing();
+    friendOnGary(run, store, 0);
+    friendOnGary(run, store, 1);
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(2);
+    expect(run.conga.length).toBe(2);
+  });
+
+  it('grows the conga line by one per pickup, carrying the name', () => {
+    const { store, run } = playing();
+    friendOnGary(run, store, 2);
+    run.update(1 / 60);
+    expect(run.conga.length).toBe(1);
+    expect(run.conga.members[0].name).toBe('Sir Cones-a-lot');
+    expect(run.conga.members[0].variant).toBe(2);
+  });
+
+  it('reports the pickup to the renderer without deciding presentation', () => {
+    const store = new GameStore();
+    const picked: FriendPickup[] = [];
+    const run = new Run(store, { seed: 7, onFriend: (p) => picked.push(p) });
+    store.start();
+    run.reset();
+    run.friends.inject(friendSpec(store.getState().lane, 4, GARY_Z));
+    run.update(1 / 60);
+    expect(picked).toHaveLength(1);
+    expect(picked[0].name).toBe('Big Dave');
+    expect(picked[0].total).toBe(1);
+    expect(picked[0].points).toBe(FRIEND_BASE_SCORE);
+  });
+
+  it('collects nothing once the run is over', () => {
+    const { store, run } = playing();
+    friendOnGary(run, store);
+    store.gameOver();
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(0);
+    expect(run.conga.length).toBe(0);
+  });
+
+  it('catches a fast friend that would tunnel past in one frame', () => {
+    const { store, run } = playing();
+    tick(run, SPAWN_GRACE + 0.1);
+    const spec = friendSpec(store.getState().lane, 3, -30);
+    run.friends.inject({ ...spec, speed: 2000 });
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(1);
+  });
+
+  it('drags the conga line along behind Gary as the run travels', () => {
+    const { store, run } = playing();
+    friendOnGary(run, store);
+    tick(run, 1);
+    const member = run.conga.members[0];
+    expect(member.z).toBeGreaterThan(0);
+    expect(member.x).toBeCloseTo(laneToX(store.getState().lane), 1);
+  });
+
+  it('friends do spawn naturally over a long run', () => {
+    const { run } = playing();
+    let seen = 0;
+    for (let i = 0; i < 6000; i++) {
+      run.traffic.clear(); // isolate: the bot is not what is under test here
+      run.update(1 / 60);
+      seen = Math.max(seen, run.friends.activeCount);
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+});
+
+describe('Run: the __spawnFriend hook', () => {
+  it('injects a friend into Gary lane, ahead of him', () => {
+    const { store, run } = playing();
+    const variant = run.spawnFriend();
+    expect(variant).not.toBeNull();
+    const spawned = run.friends.entities.filter((e) => e.active);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0].lane).toBe(store.getState().lane);
+    expect(spawned[0].z).toBe(TEST_FRIEND_SPAWN_Z);
+    expect(spawned[0].kind).toBe(FRIEND_KIND);
+  });
+
+  it('is deterministic: repeated calls cycle the whole roster', () => {
+    const { run } = playing();
+    const seen: number[] = [];
+    for (let i = 0; i < FRIEND_COUNT; i++) {
+      const v = run.spawnFriend();
+      if (v !== null) seen.push(v);
+      run.friends.clear();
+    }
+    expect(seen).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('the spawned friend is actually collected by driving into it', () => {
+    const { store, run } = playing();
+    run.spawnFriend();
+    tick(run, 1);
+    expect(store.getState().friends).toBe(1);
+    expect(run.conga.length).toBe(1);
+  });
+
+  it('does nothing outside a run', () => {
+    const store = new GameStore();
+    const run = new Run(store, { seed: 1 });
+    expect(run.spawnFriend()).toBeNull();
+    store.start();
+    run.reset();
+    store.gameOver();
+    expect(run.spawnFriend()).toBeNull();
+  });
+
+  it('always finds a slot, even with the field at capacity', () => {
+    const { run } = playing();
+    for (let i = 0; i < FRIEND_CAPACITY + 4; i++) {
+      expect(run.spawnFriend()).not.toBeNull();
+    }
+    expect(run.friends.activeCount).toBeLessThanOrEqual(FRIEND_CAPACITY);
+  });
+});
+
+describe('Run: restart clears the friends', () => {
+  it('empties the conga line and the friend field on reset()', () => {
+    const { store, run } = playing();
+    for (let i = 0; i < 3; i++) {
+      run.friends.inject(friendSpec(store.getState().lane, i, GARY_Z));
+      run.update(1 / 60);
+    }
+    run.spawnFriend(); // leave one uncollected on the road too
+    expect(run.conga.length).toBe(3);
+
+    store.gameOver();
+    store.start();
+    run.reset();
+
+    expect(run.conga.length).toBe(0);
+    expect(run.friends.activeCount).toBe(0);
+    expect(store.getState().friends).toBe(0);
+  });
+
+  it('a restarted run collects from zero again', () => {
+    const { store, run } = playing();
+    run.friends.inject(friendSpec(store.getState().lane, 0, GARY_Z));
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(1);
+
+    store.gameOver();
+    store.start();
+    run.reset();
+    expect(store.getState().friends).toBe(0);
+
+    run.friends.inject(friendSpec(store.getState().lane, 1, GARY_Z));
+    run.update(1 / 60);
+    expect(store.getState().friends).toBe(1);
+    expect(run.conga.length).toBe(1);
   });
 });

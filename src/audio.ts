@@ -24,6 +24,16 @@ export class GameAudio {
     this.tone(520, 190, 0.16, 0.03, 'sine');
   }
 
+  /**
+   * A friend joins the line: a rising two-note chirp. Deliberately the only
+   * cue in the game that goes UP — every other tone falls, so a pickup is
+   * audibly the good thing that happens on this road.
+   */
+  friend(): void {
+    this.tone(440, 660, 0.1, 0.035, 'triangle');
+    setTimeout(() => this.tone(660, 990, 0.14, 0.03, 'triangle'), 85);
+  }
+
   crash(): void {
     this.tone(105, 38, 0.42, 0.14, 'triangle');
   }
