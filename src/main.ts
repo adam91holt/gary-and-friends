@@ -307,16 +307,31 @@ window.addEventListener('keydown', (e) => {
 let lastTime = performance.now();
 let time = 0;
 
+/** Bound a genuinely suspended tab, then catch ordinary slow frames up in
+ * small simulation steps. Capping every rendered frame at 50ms caused severe
+ * time dilation under browser contention: traffic could not reach Gary before
+ * a real-time interaction deadline. Substeps preserve lane-change and collision
+ * geometry while keeping simulation time aligned with elapsed time. */
+const MAX_FRAME_DT = 0.35;
+const SIMULATION_STEP = 0.05;
+
 function frame(now: number): void {
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  const dt = Math.min((now - lastTime) / 1000, MAX_FRAME_DT);
   lastTime = now;
   time += dt;
 
-  // Tick the simulation FIRST, so everything drawn this frame reflects the same
-  // instant: distance/score/speed ramp, traffic movement + spawning, collision.
-  // Gary's rendered X is fed back in so a hit matches the cone you can see.
-  run.setGaryX(gary.position.x);
-  run.update(dt);
+  // Catch the simulation up before drawing. Gary advances in the same small
+  // steps as traffic so a low-fps late dodge follows the path seen at 60fps
+  // instead of either teleporting clear or remaining frozen for a whole frame.
+  let remaining = dt;
+  while (remaining > 0) {
+    const step = Math.min(remaining, SIMULATION_STEP);
+    const targetX = laneToX(store.getState().lane);
+    gary.position.x = MathUtils.damp(gary.position.x, targetX, 12, step);
+    run.setGaryX(gary.position.x);
+    run.update(step);
+    remaining -= step;
+  }
   traffic.sync(run.traffic.entities);
   friends.syncField(run.friends.entities, time, reducedMotion);
   friends.syncConga(run.conga.members, time, reducedMotion);
@@ -334,10 +349,9 @@ function frame(now: number): void {
       );
   road.update(dt, visualSpeed);
 
-  // Gary eases toward his lane's X, banking into the move for some juice.
+  // Gary's X already advanced with the simulation substeps above; bank the
+  // rendered cone toward the remainder of that same lane change.
   const targetX = laneToX(s.lane);
-  const prevX = gary.position.x;
-  gary.position.x = MathUtils.damp(prevX, targetX, 9, dt);
   gary.rotation.z = MathUtils.damp(
     gary.rotation.z,
     (targetX - gary.position.x) * 0.5,
