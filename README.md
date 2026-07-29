@@ -63,6 +63,9 @@ interface GaryTestApi {
   readonly nearestAhead: { distance, lane } | null;  // next vehicle ahead
   readonly nearMisses: number;                      // gaps threaded this run
   readonly conga: number;                           // friends trailing Gary now
+  readonly highScore: number;                       // persisted best (0 = none yet)
+  readonly particles: number;                       // live fx particles, all pools
+  readonly dying: boolean;                          // death animation in flight
   start(): void;                                     // menu|gameover -> playing
   __setLane(n: number): void;                        // move Gary to lane n
   __forceCollision(): void;                          // force -> gameover
@@ -100,6 +103,17 @@ asserting both catches a counter that rises without the line growing.
 folding it in would make every steering bot in the e2e suite swerve away from
 the reward.
 
+`highScore` / `particles` / `dying` project the feel layer. `highScore` is the
+persisted best as the game currently believes it (0 when there is no record, or
+when `localStorage` is unavailable) — a test can crash, read it, reload, and
+assert it survived, which is the only way to check persistence from outside.
+`particles` counts live particles across every fx pool, so e2e can prove the
+juice actually fired and can wait for particles to be in frame before a
+screenshot instead of racing an animation. `dying` is deliberately distinct from
+`state === 'gameover'`: the status flips on impact, `dying` stays true for the
+length of the squash-and-stretch, so a test can assert the death *plays* rather
+than that the state merely changed.
+
 **Extending it (factory guidance):**
 
 - Add new readable fields as getters that project from the `GameStore` (never a
@@ -124,6 +138,16 @@ the reward.
 - **Friends (pure):** `src/game/friends/` — `roster.ts` (the five named cones as
   data: name, silhouette, hitbox, tint; indexed by `variant` on both sides of
   the seam) and `conga.ts` (`CongaLine`: the path-following tail behaviour).
+- **Feel (pure):** `src/game/fx/` — `particles.ts` (`Particles`: a pooled
+  simulation writing straight into flat `Float32Array`s shaped for a
+  `BufferGeometry`), `shake.ts` (the trauma model: events *add* trauma, it decays
+  continuously, offset is `trauma²` × amplitude) and `death.ts` (`deathPose(t)`:
+  the squash → stretch → tumble → settle beat sheet as a pure function of
+  seconds since impact). Timing is logic, so it is tested at any timestep rather
+  than tuned by magic numbers in the render loop.
+- **High score (pure + a port):** `src/game/highScore.ts` — the new-best rule and
+  the parse/sanitise layer as plain functions, over an injected `StoragePort`.
+  `src/main.ts` supplies the one and only `localStorage` adapter in the app.
 - **Test API (the bridge):** `src/testApi.ts` — projects `GameStore` onto
   `window.__GARY__` (getters) and exposes the deterministic `__`-hooks.
 - **Rendering (three.js, browser-only):** `src/main.ts` (scene, fog, the two
@@ -134,14 +158,16 @@ the reward.
   placed each frame from the simulation's entities) and `src/scene/friends.ts`
   (`Friends`: pooled cone groups for the collectibles on the road and for the
   conga line — pooled rather than instanced precisely so each member can hop,
-  lean and pop in independently). `src/audio.ts` owns the
-  gesture-unlocked synth feedback, and `src/theme.ts` pins the 3D brand tokens to
-  their CSS counterparts. This side *reads* the store and never owns state.
-- **DOM overlay:** `src/ui/hud.ts` — menu / telemetry HUD / convoy roster rail /
-  game-over card and the async loading skeleton, a projection of the store like
-  the test API.
+  lean and pop in independently) and `src/scene/particles.ts` (`ParticleFx`:
+  three `Points` clouds wrapping the pure pools — dust, sparks, debris).
+  `src/audio.ts` owns the gesture-unlocked, procedurally synthesised cues, and
+  `src/theme.ts` pins the 3D brand tokens to their CSS counterparts. This side
+  *reads* the store and never owns state.
+- **DOM overlay:** `src/ui/hud.ts` — title screen / telemetry HUD / convoy roster
+  rail / game-over card / record plaque / sound toggle and the async loading
+  skeleton, a projection of the store like the test API.
 - **Browser e2e:** `e2e/smoke.spec.ts`, `e2e/gameplay.spec.ts`,
-  `e2e/friends.spec.ts`.
+  `e2e/friends.spec.ts`, `e2e/juice.spec.ts`.
 
 Keeping state out of the renderer is what makes the game testable both fast
 (Vitest on `GameStore`) and for real (Playwright via `__GARY__`).
@@ -255,10 +281,55 @@ interpenetrate.
   query in `hud.ts`. What it never removes is *information*: the pickup halo
   stays lit at a fixed opacity and the collect flourish still names the friend —
   it just fades instead of travelling.
+- **Three rigs, and game-over is a camera move.** `WRECK_RIG` swings down into a
+  low front-quarter shot the instant Gary is hit. This is not decoration: the
+  chase rig aims nineteen units up an empty road, which is exactly the wrong
+  place to be looking when the road stops — the punchline of the whole game is a
+  flattened cone at z=0, and the chase pose puts it below the frame. The wreck
+  shot deliberately *mirrors* the menu's hero framing (card docked left, Gary on
+  the right), so meeting him standing proud and leaving him flat on his back is
+  the same composition with a different outcome. The menu-only hero light is
+  reused for it, because both composed rigs sit front-left.
+- **The hazard band is the motif, and it lives at the token layer.**
+  `--hazard` / `--hazard-dim` in `index.html` are the diagonal orange/white
+  stripe off a real traffic cone. They cap every card, rail every instrument
+  readout and frame the record plaque. Never re-declare the stripe in a
+  component — read the token, or the overlay stops being the same object as the
+  cone on the road.
 - **Design tokens are shared across DOM and WebGL.** CSS tokens live in
   `index.html` `:root`; `src/theme.ts` mirrors `--accent`, `--accent-2`, and
   `--bg` as numeric three.js colors used by Gary, the road, fog, and renderer.
   Keep the two token layers pinned rather than hard-coding a component color.
+- **The comedic death is timed in the pure layer, and which way he falls is the
+  gag.** `deathPose(t)` in `src/game/fx/death.ts` owns the whole beat sheet;
+  `main.ts` only applies it. Squash and stretch preserve volume (x·y·z ≈ 1) —
+  the classic animation rule, and the reason a squashed cone reads as *squashed*
+  rather than as a rendering bug. The impact also punts him back toward the
+  camera, because the vehicle that killed him occupies his exact lane and depth,
+  so a Gary who dies in place dies hidden inside a truck. He lands a shade under
+  90°, on his back, googly eyes tilted at the camera: face-down is a dead prop,
+  face-up is a character who has had a day.
+- **Particles travel with the world.** Everything shed onto the road drifts
+  backward at very nearly the road speed (`ParticleFx.roadSpeed`). Give a
+  particle a fixed drift instead and it hangs in the air like lens dirt, which
+  is precisely what makes cheap particle work look cheap. Point sizes are small
+  on purpose — at these distances a 0.3-unit point is a fat disc, and a fine
+  spray of specks reads as dust where a few big soft circles read as bokeh. Dust
+  is alpha-blended off-white (additive dust over dark tarmac glows like embers,
+  which is wrong for grit); sparks and debris are additive, because they are
+  light.
+- **Shake is trauma, not a tween.** Events add trauma and the loop bleeds it off;
+  the offset is `trauma²` × amplitude, so a near miss is a nudge and a crash is a
+  lurch, and every shake *settles* rather than stopping dead. It is applied
+  after the rig damping (it displaces the composed shot rather than becoming a
+  target the damping chases) and the roll goes on after `lookAt`, which would
+  otherwise overwrite it.
+- **The best score is context, not telemetry — until you pass it.** The playbar's
+  Best readout is dimmed while you chase it and lights the moment you go by, and
+  the crossing is announced mid-run rather than saved for the game-over card:
+  the last stretch of a record run should be played knowing it is one. With no
+  record yet the readout is *removed* rather than parked at zero — an instrument
+  reading zero forever is worse than no instrument.
 - **The display face is self-hosted**, not merely named:
   `@fontsource-variable/space-grotesk` is imported in `main.ts` so Vite bundles
   it (no CDN at runtime) and `--font-display` actually renders in its intended

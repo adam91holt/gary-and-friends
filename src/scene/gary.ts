@@ -8,6 +8,23 @@ import {
 import { ACCENT } from '../theme.ts';
 
 /**
+ * What `createGary()` hands back: the outer group the caller positions and
+ * rotates, plus the inner `body` group that carries the squash-and-stretch
+ * scale.
+ *
+ * They are deliberately separate objects. Scaling the outer group would also
+ * scale his world position offset and fight the lane damping; the body group's
+ * origin sits on the road, so scaling it squashes him *against the tarmac* —
+ * which is the only place a squash reads correctly.
+ */
+export interface Gary {
+  /** Positioned/rotated by the renderer. Never scaled. */
+  readonly root: Group;
+  /** Scaled by the death animation. Origin at road level. */
+  readonly body: Group;
+}
+
+/**
  * Procedural "Gary": an orange road cone with two white stripe bands and a pair
  * of googly eyes so he reads as a lovable character rather than a traffic prop.
  * Pure geometry construction — no scene, no animation, no global state — so it
@@ -16,11 +33,14 @@ import { ACCENT } from '../theme.ts';
  * Gary travels forward down -Z; the chase camera sits behind him at +Z, so his
  * eyes face +Z (back toward the camera) — we ride along watching his face.
  *
- * Returns a Group whose local +Y is up; the caller positions/rotates it.
+ * Returns the root Group (local +Y is up) plus the scalable body group.
  */
-export function createGary(): Group {
+export function createGary(): Gary {
+  const root = new Group();
+  root.name = 'Gary';
   const gary = new Group();
-  gary.name = 'Gary';
+  gary.name = 'GaryBody';
+  root.add(gary);
 
   const coneOrange = new MeshStandardMaterial({
     color: ACCENT,
@@ -100,5 +120,5 @@ export function createGary(): Group {
   }
   gary.add(eyes);
 
-  return gary;
+  return { root, body: gary };
 }

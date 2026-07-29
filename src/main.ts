@@ -28,10 +28,25 @@ import {
   WebGLRenderer,
 } from 'three';
 import { GameAudio } from './audio.ts';
+import { DEATH_DURATION, deathPose } from './game/fx/death.ts';
+import {
+  addTrauma,
+  CRASH_TRAUMA,
+  decayTrauma,
+  NEAR_MISS_TRAUMA,
+  PICKUP_TRAUMA,
+  shakeOffset,
+} from './game/fx/shake.ts';
 import { Run } from './game/gameplay/run.ts';
+import {
+  loadHighScore,
+  submitHighScore,
+  type StoragePort,
+} from './game/highScore.ts';
 import { GameStore } from './game/state.ts';
 import { createGary } from './scene/gary.ts';
 import { Friends } from './scene/friends.ts';
+import { ParticleFx } from './scene/particles.ts';
 import { laneToX, Road } from './scene/road.ts';
 import { Traffic } from './scene/traffic.ts';
 import { installTestApi, type GaryTestHooks } from './testApi.ts';
@@ -41,25 +56,66 @@ import { Hud } from './ui/hud.ts';
 const store = new GameStore();
 const audio = new GameAudio();
 
+// The particle layer: hop dust, collect pops, near-miss sparks, crash debris.
+// Pure pools in src/game/fx/particles.ts; this is only their mesh.
+const fx = new ParticleFx();
+
+/**
+ * The storage adapter for the persisted best. This is the ONLY place in the app
+ * that touches `localStorage` — `game/highScore.ts` holds the rules and takes
+ * this port, so the whole comparison/parse layer stays unit-testable in node.
+ * Access is probed once, because a browser with storage disabled throws on the
+ * *property read*, not just on use.
+ */
+const storage: StoragePort | null = (() => {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+})();
+
+/** The current best. Presentation state, mirrored onto the HUD and test API. */
+let highScore = loadHighScore(storage);
+/** Latch so the mid-run record fanfare fires once per run, not once per frame. */
+let recordAnnounced = false;
+
 // Feedback for threading a gap: a whoosh cue plus a short accent pulse the HUD
 // and the lighting both read. Set by the simulation, decayed by the loop.
 let nearMissFlash = 0;
 // Same idea for a pickup, but warmer and longer: collecting a friend is the
 // happiest thing in the game and should light the whole road for a moment.
 let friendFlash = 0;
+/**
+ * Camera trauma (see game/fx/shake.ts). Events ADD to it and the loop bleeds it
+ * off, so a near miss during the crash shake deepens the same lurch rather than
+ * restarting a competing one.
+ */
+let trauma = 0;
+/** Seconds since the crash, or null while Gary is alive. Drives `deathPose`. */
+let deathTime: number | null = null;
+/** Where Gary was standing when he was hit. The death pose is relative to it. */
+let deathX = 0;
 
 // The gameplay simulation (traffic, friends, scoring, difficulty, collision).
 // Pure logic — this file only ticks it and draws whatever it says.
 const run = new Run(store, {
   onNearMiss: () => {
     nearMissFlash = 1;
+    trauma = addTrauma(trauma, NEAR_MISS_TRAUMA);
     audio.nearMiss();
     hud.pulse();
+    // Spray sparks off the side the traffic went past, so the flick of light
+    // points at the thing that nearly killed you.
+    const side = gary.root.position.x >= 0 ? -1 : 1;
+    fx.nearMiss(gary.root.position.x, side);
   },
   onFriend: (pickup) => {
     friendFlash = 1;
+    trauma = addTrauma(trauma, PICKUP_TRAUMA);
     audio.friend();
     hud.collected(pickup);
+    fx.pop(gary.root.position.x, pickup.variant);
   },
 });
 
@@ -102,6 +158,9 @@ const hooks: GaryTestHooks = {
   },
   nearMissCount: () => run.nearMisses,
   congaLength: () => run.conga.length,
+  highScore: () => highScore,
+  particleCount: () => fx.liveCount,
+  dying: () => deathTime !== null && deathTime < DEATH_DURATION,
 };
 installTestApi(store, () => hasRenderedFrame, hooks);
 
@@ -135,6 +194,22 @@ const MENU_RIG = {
 const CHASE_RIG = {
   pos: { x: 0, y: 3, z: 7 },
   look: { x: 0, y: 1.1, z: -6 },
+} as const;
+/**
+ * The wreck shot. The chase rig aims nineteen units up an empty road, which is
+ * exactly the wrong place to be looking at the moment the road stops — the
+ * punchline of the whole game is a flattened cone lying at z=0, and the default
+ * pose puts it below the bottom of the frame.
+ *
+ * So game-over swings down and around into a low front-quarter shot that
+ * mirrors the menu's hero framing: card docked left, Gary on the right. Meeting
+ * him standing proud and leaving him flat on his back is the SAME composition,
+ * and the only thing that changed is what happened to him. Offsets are relative
+ * to his crash X so the shot composes from whichever lane he died in.
+ */
+const WRECK_RIG = {
+  pos: { x: -2.2, y: 1.0, z: 6.2 },
+  look: { x: 0.6, y: 0.18, z: 3.3 },
 } as const;
 
 /**
@@ -225,16 +300,19 @@ scene.add(traffic.group);
 const friends = new Friends();
 scene.add(friends.group);
 
+// Particles ride above the road, below everything else.
+scene.add(fx.group);
+
 // Gary — stays at world z=0; the road scrolls past him. Lane drives his X.
+// `root` is positioned/rotated; `body` carries the squash-and-stretch scale.
 const gary = createGary();
-gary.position.set(laneToX(store.getState().lane), 0, 0);
-scene.add(gary);
+gary.root.position.set(laneToX(store.getState().lane), 0, 0);
+scene.add(gary.root);
 
 // Render-local feel state. It reacts to store transitions without becoming game
-// state: visual speed coasts, while crash spin/shake decay independently.
+// state: visual speed coasts, while the death animation and trauma decay
+// independently.
 let visualSpeed = store.getState().speed;
-let shake = 0;
-let crashSpinTarget = 0;
 let previousState = store.getState();
 store.subscribe((state) => {
   if (state.status !== previousState.status) {
@@ -246,24 +324,57 @@ store.subscribe((state) => {
       // The conga line is simulation-owned too: reset() empties it, and this
       // clears the meshes in the same frame so no ghost cones survive a restart.
       friends.clear();
-      gary.position.x = laneToX(state.lane);
+      // Same rule for the fx: last run's crash debris must not be hanging in
+      // the air over a fresh road.
+      fx.clear();
+      gary.root.position.set(laneToX(state.lane), 0, 0);
+      gary.root.rotation.set(0, 0, 0);
+      gary.body.scale.set(1, 1, 1);
       visualSpeed = 0;
+      trauma = 0;
+      deathTime = null;
+      recordAnnounced = false;
       if (state.status === 'playing') audio.start();
     }
     if (state.status === 'gameover') {
+      // The comedic death starts here and the loop plays it out; the crash cue,
+      // the debris and the biggest shake in the game all land on the same frame
+      // as the squash, because an impact that isn't simultaneous isn't an impact.
+      deathTime = 0;
+      deathX = gary.root.position.x;
       audio.crash();
-      shake = reducedMotion ? 0 : 0.2;
-      crashSpinTarget = gary.rotation.y + 2;
+      trauma = addTrauma(trauma, CRASH_TRAUMA);
+      fx.crash(gary.root.position.x);
+
+      // Bank the run. `submitHighScore` writes only on a genuine improvement.
+      const result = submitHighScore(storage, state.score, highScore);
+      highScore = result.best;
+      hud.setHighScore(highScore, result.isNew);
+      if (result.isNew) audio.highScore();
     }
   }
   if (state.status === 'playing' && state.lane !== previousState.lane) {
     audio.lane();
+    // Dust kicked off the lane he is leaving — the visual echo of the input.
+    if (!reducedMotion) {
+      fx.hop(gary.root.position.x, Math.sign(state.lane - previousState.lane));
+    }
   }
   previousState = state;
 });
 
 // DOM overlay (menu / HUD / gameover / loading skeleton).
-const hud = new Hud(store, () => audio.unlock());
+const hud = new Hud(
+  store,
+  () => audio.unlock(),
+  () => {
+    const muted = audio.toggleMute();
+    if (!muted) audio.lane(); // audible confirmation that sound is back
+    return muted;
+  },
+);
+hud.setHighScore(highScore);
+hud.setMuted(audio.muted);
 
 function onResize(): void {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -325,8 +436,8 @@ function frame(now: number): void {
   while (remaining > 0) {
     const step = Math.min(remaining, SIMULATION_STEP);
     const targetX = laneToX(store.getState().lane);
-    gary.position.x = MathUtils.damp(gary.position.x, targetX, 12, step);
-    run.setGaryX(gary.position.x);
+    gary.root.position.x = MathUtils.damp(gary.root.position.x, targetX, 12, step);
+    run.setGaryX(gary.root.position.x);
     run.update(step);
     remaining -= step;
   }
@@ -336,6 +447,19 @@ function frame(now: number): void {
 
   const s = store.getState();
   const menuFraming = s.status === 'menu';
+
+  // Passing your best is a mid-run event, not a game-over reveal: announce it
+  // the moment it happens, so the last stretch of the run is played knowing it.
+  if (
+    s.status === 'playing' &&
+    !recordAnnounced &&
+    highScore > 0 &&
+    s.score > highScore
+  ) {
+    recordAnnounced = true;
+    hud.recordBroken(s.score);
+    audio.highScore();
+  }
 
   visualSpeed = reducedMotion
     ? s.speed
@@ -347,42 +471,68 @@ function frame(now: number): void {
       );
   road.update(dt, visualSpeed);
 
+  // Road dust under Gary while the road is moving. Emitted on a distance
+  // cadence inside `fx`, so the plume thickens with speed instead of thinning.
+  if (!reducedMotion && s.status === 'playing') {
+    fx.road(dt, gary.root.position.x, visualSpeed);
+  }
+  fx.update(dt);
+
   // Gary's X already advanced with the simulation substeps above; bank the
   // rendered cone toward the remainder of that same lane change.
   const targetX = laneToX(s.lane);
-  gary.rotation.z = MathUtils.damp(
-    gary.rotation.z,
-    (targetX - gary.position.x) * 0.5,
-    9,
-    dt,
-  );
-  // Bob only while Gary is alive; a collision topples and spins the whole cone.
-  const canBob = s.status === 'playing' || s.status === 'menu';
-  gary.position.y =
-    reducedMotion || !canBob ? 0 : 0.04 + Math.sin(time * 2.4) * 0.04;
-  gary.rotation.x = MathUtils.damp(
-    gary.rotation.x,
-    s.status === 'gameover' ? -1.35 : 0,
-    reducedMotion ? 1e3 : 7,
-    dt,
-  );
-  const yawTarget =
-    s.status === 'gameover' ? crashSpinTarget : menuFraming ? -0.42 : 0;
-  gary.rotation.y = MathUtils.damp(
-    gary.rotation.y,
-    yawTarget,
-    reducedMotion ? 1e3 : s.status === 'gameover' ? 7 : 3.2,
-    dt,
-  );
+
+  if (deathTime !== null) {
+    // ── The comedic death ──────────────────────────────────────────────────
+    // Every number comes from the pure `deathPose(t)` beat sheet; this only
+    // applies it. Reduced motion jumps straight to the settled pose: Gary is
+    // still visibly wrecked (that's information), he just doesn't bounce.
+    deathTime += dt;
+    const pose = deathPose(reducedMotion ? DEATH_DURATION : deathTime);
+    gary.body.scale.set(pose.scaleX, pose.scaleY, pose.scaleZ);
+    gary.root.position.set(deathX + pose.x, pose.y, pose.z);
+    gary.root.rotation.set(-pose.tip, pose.spin, 0);
+  } else {
+    gary.body.scale.set(1, 1, 1);
+    gary.root.rotation.z = MathUtils.damp(
+      gary.root.rotation.z,
+      (targetX - gary.root.position.x) * 0.5,
+      9,
+      dt,
+    );
+    gary.root.rotation.x = MathUtils.damp(gary.root.rotation.x, 0, 7, dt);
+    gary.root.position.y = reducedMotion
+      ? 0
+      : 0.04 + Math.sin(time * 2.4) * 0.04;
+    gary.root.rotation.y = MathUtils.damp(
+      gary.root.rotation.y,
+      menuFraming ? -0.42 : 0,
+      reducedMotion ? 1e3 : 3.2,
+      dt,
+    );
+  }
 
   // Camera: pick the rig for the current state, then damp position AND aim
-  // toward it. On the menu that's the hero shot; playing/gameover is the chase
-  // pose tracking Gary's lane. Because both are damped, `start()` reads as a
-  // continuous camera move rather than a cut.
-  const rig = menuFraming ? MENU_RIG : CHASE_RIG;
-  // Lane tracking only applies to the chase rig; the hero shot stays composed.
-  const camTargetX = menuFraming ? rig.pos.x : rig.pos.x + targetX * 0.55;
-  const lookTargetX = menuFraming ? rig.look.x : gary.position.x * 0.4;
+  // toward it. Menu is the hero shot, playing is the chase pose, game-over
+  // swings down into the wreck shot. Because all three are damped, every
+  // transition reads as a continuous camera move rather than a cut — and the
+  // crash's move is the payoff, craning down to look at what's left of him.
+  const wreckFraming = s.status === 'gameover';
+  const rig = menuFraming ? MENU_RIG : wreckFraming ? WRECK_RIG : CHASE_RIG;
+  // Composed rigs (hero, wreck) hold their framing; only the chase pose tracks
+  // the lane. The wreck rig offsets from where Gary actually came to rest, so
+  // the shot composes identically whichever lane he died in.
+  const wreckX = deathX;
+  const camTargetX = menuFraming
+    ? rig.pos.x
+    : wreckFraming
+      ? rig.pos.x + wreckX
+      : rig.pos.x + targetX * 0.55;
+  const lookTargetX = menuFraming
+    ? rig.look.x
+    : wreckFraming
+      ? rig.look.x + wreckX
+      : gary.root.position.x * 0.4;
   // Reduced motion: snap to the rig instead of sweeping the viewport.
   const camLambda = reducedMotion ? 1e3 : 3.2;
 
@@ -391,7 +541,11 @@ function frame(now: number): void {
   // the camera. The reward literally changes the composition — the longer your
   // line, the wider the shot, which is the whole fantasy made visible. Damped
   // like every other rig move, so it reads as a slow pull-back, never a cut.
-  const tail = menuFraming ? 0 : Math.min(run.conga.tailLength, CONGA_FRAME_MAX);
+  // Composed rigs opt out: they are framing ONE cone, deliberately.
+  const tail =
+    menuFraming || wreckFraming
+      ? 0
+      : Math.min(run.conga.tailLength, CONGA_FRAME_MAX);
   camera.position.x = MathUtils.damp(camera.position.x, camTargetX, camLambda, dt);
   camera.position.y = MathUtils.damp(
     camera.position.y,
@@ -406,12 +560,15 @@ function frame(now: number): void {
     dt,
   );
 
-  if (!reducedMotion && shake > 0.001) {
-    shake *= Math.exp(-6 * dt);
-    camera.position.x += shake * Math.sin(time * 60);
-    camera.position.y += shake * Math.cos(time * 53);
-  } else {
-    shake = 0;
+  // Camera shake, applied AFTER the rig damping so a knock never fights the
+  // framing logic — it displaces the composed shot rather than becoming a
+  // target the damping then chases. Trauma-based (see game/fx/shake.ts): a
+  // near miss is a nudge, a crash is a lurch, and both settle rather than stop.
+  trauma = decayTrauma(trauma, dt);
+  const shake = reducedMotion || trauma <= 0 ? null : shakeOffset(trauma, time);
+  if (shake) {
+    camera.position.x += shake.x;
+    camera.position.y += shake.y;
   }
 
   lookAt.x = MathUtils.damp(lookAt.x, lookTargetX, camLambda, dt);
@@ -435,11 +592,17 @@ function frame(now: number): void {
     dt,
   );
   camera.lookAt(lookAt.x, lookAt.y, lookAt.z);
+  // Roll goes on AFTER lookAt (which overwrites the whole orientation), so the
+  // horizon tilts with the shake without the camera losing its aim point.
+  if (shake) camera.rotateZ(shake.roll);
 
-  // Cross-fade the hero light with the same easing as the rig move.
+  // Cross-fade the hero light with the same easing as the rig move. It sits
+  // front-left, which is where BOTH composed rigs sit — so it models Gary in
+  // his portrait and again in his wreck, and stays out of the road lighting
+  // while a run is actually under way. Dimmer on the wreck: he's had a day.
   heroLight.intensity = MathUtils.damp(
     heroLight.intensity,
-    menuFraming ? HERO_LIGHT_MAX : 0,
+    menuFraming || wreckFraming ? HERO_LIGHT_MAX : 0,
     camLambda,
     dt,
   );
