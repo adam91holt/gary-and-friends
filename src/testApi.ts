@@ -43,6 +43,12 @@ export interface GaryTestHooks {
   nearMissCount: () => number;
   /** How many friends are currently trailing Gary in the conga line. */
   congaLength: () => number;
+  /** The persisted best score (read through the storage adapter in main.ts). */
+  highScore: () => number;
+  /** Live particles across every fx pool. */
+  particleCount: () => number;
+  /** Whether Gary's death animation is currently playing. */
+  dying: () => boolean;
 }
 
 /** A read-only snapshot of the next thing Gary is about to meet. */
@@ -92,6 +98,27 @@ export interface GaryTestApi {
    * that rises without the line growing, and vice versa.
    */
   readonly conga: number;
+  /**
+   * The persisted best score, as the game currently believes it. 0 when there
+   * is no record yet (or when `localStorage` is unavailable). Updated the
+   * moment a run ends, so a test can crash, read this, reload, and assert it
+   * survived — which is the only way to test persistence from the outside.
+   */
+  readonly highScore: number;
+  /**
+   * Live particles across every fx pool (hop dust, collect pops, near-miss
+   * sparks, crash debris). Lets e2e assert the juice actually fired rather than
+   * racing an animation, and lets a screenshot wait until particles are in
+   * frame instead of catching an empty road.
+   */
+  readonly particles: number;
+  /**
+   * True while Gary's squash-and-stretch death is playing. Distinct from
+   * `state === 'gameover'`: the status flips on impact, this stays true for the
+   * length of the animation, so a test can prove the death *plays* rather than
+   * that the state merely changed.
+   */
+  readonly dying: boolean;
   /** Begin / restart play (menu|gameover -> playing). */
   start: () => void;
   /** Deterministic hook: move Gary to lane n. */
@@ -154,6 +181,15 @@ export function installTestApi(
     },
     get conga() {
       return hooks.congaLength();
+    },
+    get highScore() {
+      return hooks.highScore();
+    },
+    get particles() {
+      return hooks.particleCount();
+    },
+    get dying() {
+      return hooks.dying();
     },
     start() {
       store.start();

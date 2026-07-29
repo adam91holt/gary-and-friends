@@ -326,10 +326,17 @@ describe('Run: forceCollision hook', () => {
 });
 
 describe('Run: near-miss bonus', () => {
-  it('pays a bonus and notifies when Gary threads a gap', () => {
+  it('pays a bonus and reports which side the vehicle passed', () => {
     let notified = 0;
+    let vehicleX: number | null = null;
     const store = new GameStore();
-    const run = new Run(store, { seed: 8, onNearMiss: () => notified++ });
+    const run = new Run(store, {
+      seed: 8,
+      onNearMiss: (x) => {
+        notified++;
+        vehicleX = x;
+      },
+    });
     store.start();
     run.reset();
     tick(run, SPAWN_GRACE + 0.1);
@@ -353,6 +360,7 @@ describe('Run: near-miss bonus', () => {
     run.update(1 / 60); // the vehicle crosses GARY_Z this tick
     expect(store.getState().status).toBe('playing');
     expect(notified).toBe(1);
+    expect(vehicleX).toBe(laneToX(0));
     expect(store.getState().score - before).toBeGreaterThanOrEqual(
       NEAR_MISS_BONUS,
     );

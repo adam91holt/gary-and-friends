@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Gary and Friends</title>
+    <title>Gary and his Friends</title>
     <style>
       /* ── Design tokens ─────────────────────────────────────────────────
          Dark-first surfaces, a single owned accent (Gary orange) at the token
@@ -25,7 +25,24 @@
         --accent-2: #ffb347;
         --accent-ink: #1a0f04;
         --accent-glow: rgba(255, 122, 26, 0.45);
+        --accent-wash: rgba(255, 122, 26, 0.13);
         --danger: #ff4d5e;
+
+        /* THE motif, owned at the token layer: the diagonal orange/white
+           hazard band off a real traffic cone. It caps every card, rails the
+           instrument bar and frames the record plaque, so the overlay and the
+           cone on the road are visibly the same object. Never re-declare these
+           stripes in a component — read the token. */
+        --hazard: repeating-linear-gradient(
+          -45deg,
+          var(--accent) 0 10px,
+          #f7f2ea 10px 20px
+        );
+        --hazard-dim: repeating-linear-gradient(
+          -45deg,
+          rgba(255, 122, 26, 0.5) 0 8px,
+          rgba(247, 242, 234, 0.42) 8px 16px
+        );
 
         /* The five friends, mirrored numerically in src/theme.ts (FRIEND_TINTS)
            so the roster chip in the HUD and the cone in the scene are the same
@@ -52,8 +69,10 @@
         --fs-hero: clamp(2.75rem, 9vw, 5.5rem);
         --fs-title: clamp(2rem, 5vw, 3rem);
         --fs-readout: clamp(1.5rem, 3.4vw, 2.1rem);
+        --fs-stat: 2rem;
         --fs-body: 1rem;
         --fs-label: 0.72rem;
+        --fs-micro: 0.6rem;
 
         --ease: cubic-bezier(0.22, 1, 0.36, 1);
       }

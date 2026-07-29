@@ -85,10 +85,11 @@ export interface RunOptions {
   /** Seed for traffic spawning. Fixed seed => byte-identical run. */
   seed?: number;
   /**
-   * Called when Gary squeezes past a vehicle. The renderer turns this into
-   * feedback (whoosh + HUD flash); the simulation stays presentation-free.
+   * Called when Gary squeezes past a vehicle. Its world X lets presentation put
+   * feedback on the side the vehicle actually passed; the simulation still
+   * remains presentation-free.
    */
-  onNearMiss?: () => void;
+  onNearMiss?: (vehicleX: number) => void;
   /**
    * Called when Gary picks a friend up. Same contract as `onNearMiss`: the
    * simulation reports *what happened*, the renderer decides how it feels.
@@ -114,7 +115,7 @@ export class Run {
   /** Gary's continuous X, so a hit lands mid-lane-change too. */
   private garyX: number;
   private readonly collider: Collider;
-  private readonly onNearMiss: (() => void) | null;
+  private readonly onNearMiss: ((vehicleX: number) => void) | null;
   private readonly onFriend: ((pickup: FriendPickup) => void) | null;
   /** Tightest gap seen so far per approaching entity id. */
   private readonly closest = new Map<number, number>();
@@ -341,7 +342,7 @@ export class Run {
       this.bonus += NEAR_MISS_BONUS;
       this.nearMissCount++;
       this.store.addScore(NEAR_MISS_BONUS);
-      this.onNearMiss?.();
+      this.onNearMiss?.(laneToX(entity.lane));
     }
   }
 
