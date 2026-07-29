@@ -16,7 +16,7 @@ const SPEC: EntitySpec = {
 function field(overrides: Partial<ConstructorParameters<typeof EntityField>[0]> = {}) {
   return new EntityField({
     capacity: 4,
-    rng: createRng(1),
+    rngFactory: () => createRng(1),
     interval: () => 1,
     spawn: () => ({ ...SPEC }),
     recycleZ: 10,
@@ -117,6 +117,21 @@ describe('EntityField spawn cadence', () => {
     expect(seen[0]).toEqual([0]);
   });
 
+  it('honours occupancy supplied by another field', () => {
+    const seen: number[][] = [];
+    const traffic = field();
+    traffic.inject({ ...SPEC, lane: 1, z: -100 });
+    const friends = field({
+      spawn: (_rng, occupied) => {
+        seen.push([...occupied]);
+        return { ...SPEC, kind: 'friend', lane: 0 };
+      },
+    });
+
+    friends.spawnNow(traffic.entities);
+    expect(seen[0]).toEqual([1]);
+  });
+
   it('honours a spawn rule that declines the beat', () => {
     const f = field({ spawn: () => null });
     expect(f.spawnNow()).toBeNull();
@@ -136,6 +151,23 @@ describe('EntityField lifecycle', () => {
     // Timer was reset, so a short tick must not immediately spawn.
     f.update(0.2, 10);
     expect(f.activeCount).toBe(0);
+  });
+
+  it('clear() replays the seeded random sequence', () => {
+    const f = field({
+      interval: (_speed, rng) => 0.5 + rng(),
+      spawn: (rng) => ({ ...SPEC, lane: Math.floor(rng() * 3) }),
+    });
+    const snapshot = (): string => {
+      for (let i = 0; i < 300; i++) f.update(1 / 60, 20);
+      return JSON.stringify(
+        f.entities.filter((e) => e.active).map((e) => [e.lane, e.z]),
+      );
+    };
+
+    const first = snapshot();
+    f.clear();
+    expect(snapshot()).toBe(first);
   });
 
   it('despawn() retires a single entity', () => {

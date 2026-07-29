@@ -143,12 +143,13 @@ To add a new kind of world object:
 ```ts
 const friends = new EntityField({
   capacity: 12,
-  rng: createRng(seed),
+  rngFactory: () => createRng(seed),         // clear() replays this seed
   interval: (speed) => 90 / speed,           // cadence scales with speed
   spawn: (rng, occupiedLanes) => ({ kind: 'friend', lane, z, ... } | null),
 });
 
-friends.update(dt, state.speed);             // move + recycle + spawn
+// External entities participate in occupancy, so friends cannot spawn in cars.
+friends.update(dt, state.speed, traffic.entities);
 const hit = findHit(friends.entities, garyCollider, 'friend', laneToX);
 if (hit) { friends.despawn(hit); store.addFriends(); }
 ```

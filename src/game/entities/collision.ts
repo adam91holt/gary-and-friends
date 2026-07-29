@@ -5,12 +5,11 @@
  * exact same predicate that ends a run in the browser runs in Vitest in
  * microseconds. The renderer never gets a vote on whether something was hit.
  *
- * Two tiers, because the game needs both:
- *   - `sameLaneOverlap` — the cheap 1D test used by the traffic sweep (the
- *     player and traffic are always lane-snapped, so lane equality + Z overlap
- *     is exact and fast).
- *   - `aabbOverlap` — the 2D box test used when X is continuous (Gary mid-lerp
- *     between lanes, or ticket 03's friends drifting across lanes).
+ * Two reusable tiers are exported:
+ *   - `sameLaneOverlap` — a cheap lane-index + swept-Z predicate for callers
+ *     whose colliders are lane-snapped.
+ *   - `aabbOverlap` — the production 2D box predicate used when X is continuous
+ *     (Gary mid-lerp, or ticket 03's friends drifting across lanes).
  */
 import type { Entity } from './entity.ts';
 

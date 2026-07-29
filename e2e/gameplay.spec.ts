@@ -88,18 +88,23 @@ test('lane input, traffic, scoring, speed ramp, collision and restart', async ({
     .toBeGreaterThan(0);
 
   // ── Visual artifact: Gary mid-game, threading real traffic ──────────────
-  // Hold a lane and wait for a vehicle to actually close on him, so the shot
-  // shows the dodge rather than an empty road with cars lost in the fog.
-  await page.evaluate(() => window.__GARY__?.__setLane(1));
+  // Steer away from the nearest closing vehicle while waiting for traffic to
+  // enter the shot; parking in one lane would make this seed/timing dependent.
   await expect
     .poll(
       () =>
-        page.evaluate(
-          () => window.__GARY__?.nearestAhead?.distance ?? Infinity,
-        ),
+        page.evaluate(() => {
+          const api = window.__GARY__;
+          const nearest = api?.nearestAhead;
+          if (!api || !nearest) return Infinity;
+          if (nearest.distance < 28) {
+            api.__setLane(nearest.lane === 0 ? 1 : 0);
+          }
+          return nearest.distance;
+        }),
       { timeout: 10_000, intervals: [50] },
     )
-    .toBeLessThan(14);
+    .toBeLessThan(24);
   await page.screenshot({ path: 'test-results/gameplay.png', fullPage: true });
 
   // ── Collision ends the run ───────────────────────────────────────────────
@@ -116,9 +121,11 @@ test('lane input, traffic, scoring, speed ramp, collision and restart', async ({
   expect(await page.evaluate(() => window.__GARY__?.score)).toBe(finalScore);
 
   // Lane input is inert once the run has ended.
+  const crashedLane = await page.evaluate(() => window.__GARY__?.lane);
   await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(100);
   expect(await page.evaluate(() => window.__GARY__?.state)).toBe('gameover');
+  expect(await page.evaluate(() => window.__GARY__?.lane)).toBe(crashedLane);
 
   await page.screenshot({
     path: 'test-results/gameplay-gameover.png',
@@ -173,42 +180,34 @@ test('near-miss feedback fires when Gary threads a gap', async ({ page }) => {
   // Deterministically perform a late dodge: sit in the lane the next vehicle
   // occupies, then peel out only once it is nearly on top of Gary. He is still
   // lerping clear as it draws level — the tight-gap geometry the bonus rewards.
-  await page.evaluate(async () => {
+  const credited = await page.evaluate(async () => {
     const api = window.__GARY__;
-    if (!api) return;
+    if (!api) return false;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    const shown = () => (api.nearMisses ?? 0) > 0;
+    const deadline = performance.now() + 15_000;
+    let trackedLane: number | null = null;
 
-    for (let attempt = 0; attempt < 40 && !shown(); attempt++) {
+    while (performance.now() < deadline && (api.nearMisses ?? 0) === 0) {
       if (api.state !== 'playing') {
         api.start();
+        trackedLane = null;
         await sleep(80);
         continue;
       }
-
       const target = api.nearestAhead;
-      if (target === null || target.distance > 60) {
-        await sleep(50);
-        continue;
-      }
-
-      // Line up in its lane while it is still far out.
-      api.__setLane(target.lane);
-      const lane = target.lane;
-
-      // Hold until it is close, then swerve to an adjacent lane.
-      for (let i = 0; i < 120; i++) {
-        const now = api.nearestAhead;
-        if (api.state !== 'playing' || now === null) break;
-        if (now.lane === lane && now.distance < 11) {
-          api.__setLane(lane === 0 ? 1 : lane - 1);
-          break;
+      if (target && target.distance < 60) {
+        if (trackedLane === null) trackedLane = target.lane;
+        if (target.lane === trackedLane && target.distance >= 11) {
+          api.__setLane(trackedLane);
+        } else if (target.lane === trackedLane) {
+          api.__setLane(trackedLane === 0 ? 1 : trackedLane - 1);
         }
-        await sleep(16);
       }
-      await sleep(200); // let the pass resolve
+      await sleep(16);
     }
+    return (api.nearMisses ?? 0) > 0;
   });
+  expect(credited).toBe(true);
 
   // The simulation credited a threaded gap. Asserted on the durable counter
   // rather than the toast's CSS class, which is a ~0.6s animation and is
@@ -249,12 +248,21 @@ test('a run survives long enough to prove traffic is dodgeable', async ({
     .poll(() => page.evaluate(() => window.__GARY__?.state))
     .toBe('playing');
 
-  // Sit in the centre lane and let real spawned traffic arrive for a while.
-  // The spawn rule guarantees a passable lane, so a crash here without any
-  // steering is possible — what must NOT happen is an error or a stuck state.
-  await page.waitForTimeout(3_000);
-  const state = await page.evaluate(() => window.__GARY__?.state);
-  expect(['playing', 'gameover']).toContain(state);
+  // Drive with the same finite-rate lane movement as a player: move away from
+  // the nearest vehicle once it enters the reaction window.
+  await page.evaluate(async () => {
+    const api = window.__GARY__;
+    if (!api) return;
+    const deadline = performance.now() + 6_000;
+    while (performance.now() < deadline && api.state === 'playing') {
+      const nearest = api.nearestAhead;
+      if (nearest && nearest.distance < 32) {
+        api.__setLane(nearest.lane === 0 ? 1 : 0);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+  });
+  expect(await page.evaluate(() => window.__GARY__?.state)).toBe('playing');
 
   // Whatever happened, the game is still responsive: a restart plays again.
   await page.evaluate(() => window.__GARY__?.start());

@@ -12,7 +12,7 @@
  * `traffic`, tick it in `update()`, and resolve it with the same `findHit`
  * helper — `store.addFriends()` on a hit instead of `store.gameOver()`.
  */
-import { laneToX } from '../entities/lanes.ts';
+import { LANE_WIDTH, laneToX } from '../entities/lanes.ts';
 import { findHit, type Collider } from '../entities/collision.ts';
 import type { EntityField } from '../entities/field.ts';
 import {
@@ -20,7 +20,7 @@ import {
   TRAFFIC_KIND,
   TRAFFIC_VARIANTS,
 } from '../entities/traffic.ts';
-import type { GameStore } from '../state.ts';
+import { LANE_COUNT, type GameStore } from '../state.ts';
 import { scoreForDistance, speedForDistance } from './difficulty.ts';
 
 /** Gary's hitbox. Slightly tighter than his cone looks — near-misses should
@@ -77,8 +77,6 @@ export class Run {
   private garyX: number;
   private readonly collider: Collider;
   private readonly onNearMiss: (() => void) | null;
-  /** Entity ids already credited as a near miss, so each pass scores once. */
-  private readonly credited = new Set<number>();
   /** Tightest gap seen so far per approaching entity id. */
   private readonly closest = new Map<number, number>();
   /** Near misses credited this run. */
@@ -117,7 +115,6 @@ export class Run {
    */
   reset(): void {
     this.traffic.clear();
-    this.credited.clear();
     this.closest.clear();
     this.distance = 0;
     this.bonus = 0;
@@ -192,12 +189,11 @@ export class Run {
    * of the next lane, so an instantaneous sample scores it as a boring clean
    * pass. Minimum-over-approach measures what the player actually felt.
    *
-   * Each entity id scores at most once; ids are cleared on reset().
+   * Each entity crosses Gary only once; `prevZ` makes the passing tick unique.
    */
   private scoreNearMisses(): void {
     for (const entity of this.traffic.entities) {
       if (!entity.active || entity.kind !== TRAFFIC_KIND) continue;
-      if (this.credited.has(entity.id)) continue;
 
       // Phase 2 first: has it drawn level with Gary this tick?
       const passing = entity.z >= GARY_Z && entity.prevZ < GARY_Z;
@@ -218,7 +214,6 @@ export class Run {
       if (!passing) continue;
 
       // Settle up.
-      this.credited.add(entity.id);
       const closest = this.closest.get(entity.id);
       this.closest.delete(entity.id);
       if (closest === undefined || closest > NEAR_MISS_GAP) continue;
@@ -240,30 +235,50 @@ export class Run {
    * actually testing collision, not just the state machine.
    */
   forceCollision(): void {
-    const lane = this.store.getState().lane;
+    if (this.store.getState().status !== 'playing') return;
+
     this.grace = 0;
-    // Inject a vehicle exactly on Gary, then run the REAL collision predicate.
-    // Deliberately not a direct gameOver() call: this way the e2e hook proves
-    // collision detection works, not merely that the state machine can be
-    // poked. If the pool happens to be full there is nothing to hit, so fall
-    // back to the store action to keep the hook's contract unconditional.
+    let lane = 0;
+    for (let candidate = 1; candidate < LANE_COUNT; candidate++) {
+      if (
+        Math.abs(this.garyX - laneToX(candidate)) <
+        Math.abs(this.garyX - laneToX(lane))
+      ) {
+        lane = candidate;
+      }
+    }
+
+    // Ensure a slot even at capacity: this deterministic hook owns the injected
+    // obstacle and must not bypass collision by directly changing store state.
+    if (this.traffic.activeCount === this.traffic.entities.length) {
+      const first = this.traffic.entities.find((entity) => entity.active);
+      if (first) this.traffic.despawn(first);
+    }
     const injected = this.traffic.inject({
       kind: TRAFFIC_KIND,
       lane,
       z: GARY_Z,
       speed: 0,
-      halfWidth: TRAFFIC_VARIANTS[1].halfWidth,
+      // Gary can be exactly halfway between lanes. This test-only obstacle spans
+      // half a lane so it still overlaps his rendered X during a lane change.
+      halfWidth: LANE_WIDTH / 2,
       halfDepth: TRAFFIC_VARIANTS[1].halfDepth,
       variant: 1,
     });
+    if (injected === null) return;
 
     this.collider.x = this.garyX;
-    this.collider.lane = lane;
-    const hit =
-      injected !== null &&
-      findHit(this.traffic.entities, this.collider, TRAFFIC_KIND, laneToX) !==
-        null;
-    if (!hit && injected !== null) this.traffic.despawn(injected);
+    this.collider.lane = this.store.getState().lane;
+    const hit = findHit(
+      this.traffic.entities,
+      this.collider,
+      TRAFFIC_KIND,
+      laneToX,
+    );
+    if (hit === null) {
+      this.traffic.despawn(injected);
+      return;
+    }
     this.store.gameOver();
   }
 }

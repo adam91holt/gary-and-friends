@@ -6,7 +6,7 @@
  * the generic `EntityField`, so ticket 03's friends get the same pool, the same
  * recycling and the same collision predicate for free.
  */
-import { LANE_COUNT } from '../state.ts';
+import { BASE_SPEED, LANE_COUNT } from '../state.ts';
 import type { EntitySpec } from './entity.ts';
 import { EntityField } from './field.ts';
 import { createRng, randomIndex, randomRange, type Rng } from './rng.ts';
@@ -131,13 +131,18 @@ export function spawnTraffic(
  * any two consecutive beats are visible to the third, so three spawns can never
  * occupy all three lanes within one stretch of road.
  */
-export const SPAWN_GUARD_DEPTH = SPAWN_GAP * SPAWN_JITTER_MAX * 2 + 1;
+export const SPAWN_GUARD_DEPTH =
+  SPAWN_GAP *
+    SPAWN_JITTER_MAX *
+    ((BASE_SPEED + TRAFFIC_APPROACH) / BASE_SPEED) *
+    2 +
+  1;
 
 /** A traffic field wired with the rules above. `seed` makes runs reproducible. */
 export function createTrafficField(seed = 1337): EntityField {
   return new EntityField({
     capacity: TRAFFIC_CAPACITY,
-    rng: createRng(seed),
+    rngFactory: () => createRng(seed),
     interval: (speed, rng) =>
       trafficInterval(speed, randomRange(rng, SPAWN_JITTER_MIN, SPAWN_JITTER_MAX)),
     spawn: spawnTraffic,

@@ -399,7 +399,11 @@ export class Hud {
     const throttle = intensityForSpeed(s.speed);
     this.speedFill.style.transform = `scaleX(${throttle.toFixed(3)})`;
 
-    if (s.score !== this.prev.score) this.flash(this.scoreRO);
+    // Distance score changes many times per second; bump only on a readable
+    // milestone instead of continuously restarting the animation.
+    if (Math.floor(s.score / 25) > Math.floor(this.prev.score / 25)) {
+      this.flash(this.scoreRO);
+    }
     if (s.friends !== this.prev.friends) this.flash(this.friendsRO);
 
     if (s.status === 'gameover' && this.prev.status !== 'gameover') {

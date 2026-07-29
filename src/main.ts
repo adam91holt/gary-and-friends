@@ -192,14 +192,14 @@ let crashSpinTarget = 0;
 let previousState = store.getState();
 store.subscribe((state) => {
   if (state.status !== previousState.status) {
-    if (state.status === 'playing') {
-      // Every entry into play is a clean run: clear traffic, distance and the
-      // spawn grace period. GameStore.start() already reset score/speed/lane.
+    if (state.status === 'playing' || state.status === 'menu') {
+      // Both start/restart and an explicit store.reset() clear simulation-owned
+      // state. Otherwise reset() would leave frozen traffic visible on the menu.
       run.reset();
       traffic.sync(run.traffic.entities);
       gary.position.x = laneToX(state.lane);
       visualSpeed = 0;
-      audio.start();
+      if (state.status === 'playing') audio.start();
     }
     if (state.status === 'gameover') {
       audio.crash();

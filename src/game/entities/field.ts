@@ -10,18 +10,18 @@
  * ```ts
  * const friends = new EntityField({
  *   capacity: 12,
- *   rng: createRng(seed),
+ *   rngFactory: () => createRng(seed),
  *   // Cadence: seconds between spawns, given the current forward speed.
  *   interval: (speed) => 90 / speed,
- *   // Build one entity. `occupiedLanes` lists lanes already taken at the
- *   // spawn line this tick, so a friend never spawns inside a car.
+ *   // Build one entity. `occupiedLanes` includes this field plus any external
+ *   // field passed to update(), so a friend never spawns inside a car.
  *   spawn: (rng, occupiedLanes) => {
  *     const lane = pickFreeLane(rng, occupiedLanes);
  *     return lane === null ? null : { kind: 'friend', lane, z: SPAWN_Z, ... };
  *   },
  * });
  *
- * friends.update(dt, state.speed);
+ * friends.update(dt, state.speed, traffic.entities);
  * const hit = findHit(friends.entities, garyCollider, 'friend', laneToX);
  * if (hit) { friends.despawn(hit); store.addFriends(); }
  * ```
@@ -46,8 +46,12 @@ export type SpawnFn = (
 export interface EntityFieldOptions {
   /** Max simultaneous live entities. The pool never allocates beyond this. */
   capacity: number;
-  /** Deterministic randomness source (see ./rng.ts). */
-  rng: Rng;
+  /**
+   * Creates the deterministic randomness source (see ./rng.ts). Called at
+   * construction and again by clear(), so a restarted seeded run replays the
+   * same sequence rather than continuing the previous run's stream.
+   */
+  rngFactory: () => Rng;
   /**
    * Seconds until the next spawn beat at a given forward speed. Cadence scales
    * here. The rng is passed in so jitter stays on the seeded path (never
@@ -75,6 +79,7 @@ export class EntityField {
   private readonly pool: Entity[] = [];
   private readonly options: Required<EntityFieldOptions>;
   private readonly occupied: number[] = [];
+  private rng: Rng;
   private timer = 0;
   /** Delay for the next beat, drawn once per beat. Null = not yet drawn. */
   private nextInterval: number | null = null;
@@ -87,6 +92,7 @@ export class EntityField {
       spawnZ: DEFAULT_SPAWN_Z,
       ...options,
     };
+    this.rng = this.options.rngFactory();
     for (let i = 0; i < this.options.capacity; i++) {
       this.pool.push({
         id: 0,
@@ -118,7 +124,11 @@ export class EntityField {
    * @param dt    seconds since the last tick
    * @param speed the player's forward speed (world-units/sec)
    */
-  update(dt: number, speed: number): void {
+  update(
+    dt: number,
+    speed: number,
+    externalEntities: readonly Entity[] = [],
+  ): void {
     if (dt <= 0) return;
 
     for (const entity of this.pool) {
@@ -131,16 +141,16 @@ export class EntityField {
       if (entity.z > this.options.recycleZ) entity.active = false;
     }
 
-    this.tickSpawns(dt, speed);
+    this.tickSpawns(dt, speed, externalEntities);
   }
 
   /**
    * Force one spawn beat immediately, ignoring the cadence timer. Returns the
    * entity, or null if the pool is full or the spawner declined the beat.
    */
-  spawnNow(): Entity | null {
-    this.collectOccupiedLanes();
-    const spec = this.options.spawn(this.options.rng, this.occupied);
+  spawnNow(externalEntities: readonly Entity[] = []): Entity | null {
+    this.collectOccupiedLanes(externalEntities);
+    const spec = this.options.spawn(this.rng, this.occupied);
     if (spec === null) return null;
     return this.inject(spec);
   }
@@ -176,11 +186,13 @@ export class EntityField {
     entity.active = false;
   }
 
-  /** Clear the field and the cadence timer — used by start()/reset(). */
+  /** Clear entities, cadence and RNG — used by start()/reset(). */
   clear(): void {
     for (const entity of this.pool) entity.active = false;
     this.timer = 0;
     this.nextInterval = null;
+    this.nextId = 1;
+    this.rng = this.options.rngFactory();
   }
 
   /**
@@ -189,7 +201,11 @@ export class EntityField {
    * rather than staying flat. Loops (rather than spawning at most once) so a
    * long frame can't silently swallow a beat.
    */
-  private tickSpawns(dt: number, speed: number): void {
+  private tickSpawns(
+    dt: number,
+    speed: number,
+    externalEntities: readonly Entity[],
+  ): void {
     if (speed <= 0) return;
     this.timer += dt;
     let guard = this.options.capacity;
@@ -199,13 +215,13 @@ export class EntityField {
       if (this.nextInterval === null) {
         this.nextInterval = Math.max(
           0.05,
-          this.options.interval(speed, this.options.rng),
+          this.options.interval(speed, this.rng),
         );
       }
       if (this.timer < this.nextInterval) break;
       this.timer -= this.nextInterval;
       this.nextInterval = null;
-      this.spawnNow();
+      this.spawnNow(externalEntities);
       if (--guard <= 0) {
         this.timer = 0;
         break;
@@ -219,15 +235,23 @@ export class EntityField {
    * through. Deliberately one-sided: nothing is ever further out than the spawn
    * line, and looking "behind" it would only ever count nothing.
    */
-  private collectOccupiedLanes(): void {
+  private collectOccupiedLanes(externalEntities: readonly Entity[]): void {
     this.occupied.length = 0;
     const { spawnZ, spawnGuardDepth } = this.options;
-    for (const entity of this.pool) {
-      if (!entity.active) continue;
-      const travelled = entity.z - spawnZ;
-      if (travelled >= 0 && travelled <= spawnGuardDepth) {
-        this.occupied.push(entity.lane);
+    const collect = (entities: readonly Entity[]): void => {
+      for (const entity of entities) {
+        if (!entity.active) continue;
+        const travelled = entity.z - spawnZ;
+        if (
+          travelled >= 0 &&
+          travelled <= spawnGuardDepth &&
+          !this.occupied.includes(entity.lane)
+        ) {
+          this.occupied.push(entity.lane);
+        }
       }
-    }
+    };
+    collect(this.pool);
+    collect(externalEntities);
   }
 }

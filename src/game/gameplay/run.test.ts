@@ -162,8 +162,9 @@ describe('Run: collision', () => {
 
   it('survives a long clean run when Gary can be steered (spawns stay fair)', () => {
     const { store, run } = playing();
-    // A simple bot: pick the lane with the most clear road, but never swerve
-    // into a vehicle currently level with Gary (a real player couldn't either).
+    // A simple bot: pick the lane with the most clear road, but move its collider
+    // with the renderer's real damping rate rather than teleporting lane-to-lane.
+    let garyX = laneToX(store.getState().lane);
     for (let i = 0; i < 5000; i++) {
       const clearance = [0, 1, 2].map((lane) => {
         let nearest = Infinity;
@@ -181,7 +182,9 @@ describe('Run: collision', () => {
         if (clearance[lane] > clearance[best]) best = lane;
       }
       store.setLane(best);
-      run.setGaryX(laneToX(store.getState().lane));
+      const targetX = laneToX(store.getState().lane);
+      garyX = targetX + (garyX - targetX) * Math.exp(-9 / 60);
+      run.setGaryX(garyX);
       run.update(1 / 60);
       if (store.getState().status !== 'playing') break;
     }
@@ -255,6 +258,15 @@ describe('Run: forceCollision hook', () => {
     const run = new Run(store);
     expect(() => run.forceCollision()).not.toThrow();
     expect(store.getState().status).toBe('menu');
+    expect(run.traffic.activeCount).toBe(0);
+  });
+
+  it('uses Gary’s rendered position during an in-progress lane change', () => {
+    const { store, run } = playing();
+    run.setGaryX(laneToX(1));
+    store.setLane(2);
+    run.forceCollision();
+    expect(store.getState().status).toBe('gameover');
   });
 
   it('works from any lane', () => {
