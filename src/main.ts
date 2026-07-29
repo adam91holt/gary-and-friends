@@ -208,8 +208,10 @@ const CHASE_RIG = {
  * to his crash X so the shot composes from whichever lane he died in.
  */
 const WRECK_RIG = {
-  pos: { x: -2.2, y: 1.0, z: 6.2 },
-  look: { x: 0.6, y: 0.18, z: 3.3 },
+  // Gary settles at +0.6 yaw, so the payoff camera crosses to his front-right;
+  // the card remains left-docked while his eyes, not his back, carry the joke.
+  pos: { x: 3.0, y: 1.5, z: 6.2 },
+  look: { x: 0.0, y: 0.35, z: 3.3 },
 } as const;
 
 /**
@@ -478,6 +480,10 @@ function frame(now: number): void {
   // cadence inside `fx`, so the plume thickens with speed instead of thinning.
   if (!reducedMotion && s.status === 'playing') {
     fx.road(dt, gary.root.position.x, visualSpeed);
+  } else if (!reducedMotion && s.status === 'gameover') {
+    // The screen players linger on keeps breathing after the impact burst dies:
+    // one slow curl off the wreck, sparse enough to preserve the still payoff.
+    fx.smoulder(dt, gary.root.position.x);
   }
   fx.update(dt);
 

@@ -69,8 +69,7 @@ const CSS = `
   transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
   pointer-events: none;
 }
-#hud[data-screen="playing"] .playbar,
-#hud[data-screen="gameover"] .playbar { opacity: 1; transform: none; }
+#hud[data-screen="playing"] .playbar { opacity: 1; transform: none; }
 
 /* Modal cards sit over a vignette that lets the road show through. */
 #hud .scrim {
@@ -150,7 +149,11 @@ const CSS = `
   font-size: var(--fs-hero); font-weight: 700; line-height: 0.94;
   letter-spacing: -0.02em; margin: 14px 0 0;
 }
-#hud .hero .amp { color: var(--accent); }
+#hud .hero .amp {
+  display: block;
+  font-size: 0.3em; font-weight: 600; letter-spacing: 0.22em;
+  color: var(--accent-2); margin: 6px 0 2px;
+}
 #hud .title {
   font-size: var(--fs-title); font-weight: 700; letter-spacing: -0.02em;
   line-height: 1.05; margin-top: 8px;
@@ -336,8 +339,8 @@ const CSS = `
   transition: opacity 0.3s var(--ease);
   pointer-events: none;
 }
-#hud[data-screen="playing"] .roster,
-#hud[data-screen="gameover"] .roster { opacity: 1; }
+#hud[data-screen="playing"] .roster { opacity: 1; }
+#hud[data-screen="gameover"] .roster { opacity: 0; }
 #hud .roster .cap {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   padding-bottom: 9px; margin-bottom: 3px;
@@ -493,7 +496,7 @@ const CSS = `
    thing is stamped in. This is the loudest state in the overlay, and it should
    be — it happens once a session at best. */
 #hud .best.new {
-  background: rgba(255,122,26,0.13);
+  background: var(--accent-wash);
   border-color: var(--accent-glow);
 }
 #hud .best.new::before { background: var(--hazard); }

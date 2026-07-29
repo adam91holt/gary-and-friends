@@ -11,10 +11,10 @@
  * road dust of slots. Separate pools also mean separate draw calls with the
  * right blend and size per family — still only three, which is nothing.
  *
- * All pools are additive because the pure simulation fades vertex colour to
- * black. Under additive blending black is transparent; inactive slots are also
- * parked outside the scene. Dust stays soft and understated through its muted
- * tint and lower material opacity rather than alpha blending black sprites.
+ * Sparks and debris are additive; dust is normal alpha-blended so pale road grit
+ * stays material instead of glowing like an ember. The pure simulation exposes a
+ * per-particle alpha attribute, allowing every pool to fade cleanly without
+ * muddying its tint.
  */
 import {
   AdditiveBlending,
@@ -24,8 +24,10 @@ import {
   Color,
   DynamicDrawUsage,
   Group,
+  NormalBlending,
   Points,
   PointsMaterial,
+  type Blending,
   type Texture,
 } from 'three';
 import { Particles } from '../game/fx/particles.ts';
@@ -74,6 +76,7 @@ function createSpriteTexture(): Texture {
 interface PoolOptions {
   readonly size: number;
   readonly opacity: number;
+  readonly blending: Blending;
 }
 
 class Pool {
@@ -81,6 +84,7 @@ class Pool {
   private readonly geometry = new BufferGeometry();
   private readonly position: BufferAttribute;
   private readonly color: BufferAttribute;
+  private readonly alpha: BufferAttribute;
 
   constructor(
     readonly system: Particles,
@@ -89,10 +93,13 @@ class Pool {
   ) {
     this.position = new BufferAttribute(system.positions, 3);
     this.color = new BufferAttribute(system.colors, 3);
+    this.alpha = new BufferAttribute(system.alphas, 1);
     this.position.setUsage(DynamicDrawUsage);
     this.color.setUsage(DynamicDrawUsage);
+    this.alpha.setUsage(DynamicDrawUsage);
     this.geometry.setAttribute('position', this.position);
     this.geometry.setAttribute('color', this.color);
+    this.geometry.setAttribute('alpha', this.alpha);
 
     const material = new PointsMaterial({
       size: options.size,
@@ -101,18 +108,26 @@ class Pool {
       transparent: true,
       opacity: options.opacity,
       depthWrite: false,
-      blending: AdditiveBlending,
+      blending: options.blending,
       sizeAttenuation: true,
     });
+    material.onBeforeCompile = (shader) => {
+      shader.vertexShader = `attribute float alpha;\nvarying float vParticleAlpha;\n${shader.vertexShader}`
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvParticleAlpha = alpha;');
+      shader.fragmentShader = `varying float vParticleAlpha;\n${shader.fragmentShader}`
+        .replace('#include <alphatest_fragment>', 'diffuseColor.a *= vParticleAlpha;\n#include <alphatest_fragment>');
+    };
+    material.customProgramCacheKey = () => 'particle-alpha-v1';
     this.points = new Points(this.geometry, material);
     this.points.frustumCulled = false;
   }
 
-  /** Step the pure system, then flag both attribute buffers for upload. */
+  /** Step the pure system, then flag its attribute buffers for upload. */
   update(dt: number): void {
     this.system.update(dt);
     this.position.needsUpdate = true;
     this.color.needsUpdate = true;
+    this.alpha.needsUpdate = true;
   }
 }
 
@@ -136,6 +151,8 @@ export class ParticleFx {
   private rng: Rng = createRng(PARTICLE_SEED);
   /** Time until the next continuous road-dust puff. */
   private dustTimer = 0;
+  /** Slow post-crash breath, reset between runs. */
+  private smoulderTimer = 0;
   /**
    * The road speed last reported by the loop. Every emitter reads it, because
    * the whole scene is drawn in Gary's frame: the road rushes past at `speed`,
@@ -156,19 +173,19 @@ export class ParticleFx {
     this.dust = new Pool(
       new Particles({ capacity: 340, gravity: -3.4, drag: 1.6, fade: 1.4 }),
       sprite,
-      { size: 0.19, opacity: 0.5 },
+      { size: 0.19, opacity: 0.5, blending: NormalBlending },
     );
     // Pickup sparks: light, floaty, tinted to the friend who just joined.
     this.sparks = new Pool(
       new Particles({ capacity: 340, gravity: -2.6, drag: 1.3, fade: 2.1 }),
       sprite,
-      { size: 0.15, opacity: 0.95 },
+      { size: 0.15, opacity: 0.95, blending: AdditiveBlending },
     );
     // Crash debris: fast, ballistic, and it hangs around to sit under the card.
     this.debris = new Pool(
       new Particles({ capacity: 220, gravity: -11, drag: 0.55, fade: 1.2 }),
       sprite,
-      { size: 0.17, opacity: 1 },
+      { size: 0.17, opacity: 1, blending: AdditiveBlending },
     );
 
     this.group.add(this.dust.points, this.sparks.points, this.debris.points);
@@ -319,6 +336,31 @@ export class ParticleFx {
     );
   }
 
+  /** Keep the payoff shot breathing with an occasional curl off the wreck. */
+  smoulder(dt: number, x: number): void {
+    this.smoulderTimer -= dt;
+    if (this.smoulderTimer > 0) return;
+    this.smoulderTimer = 0.55 + this.rng() * 0.4;
+    this.dust.system.emit(
+      {
+        x,
+        y: 0.12,
+        z: 3.35,
+        count: 1,
+        speed: 0.08,
+        speedJitter: 0.12,
+        lift: 0.42,
+        life: 2.2,
+        lifeJitter: 1.1,
+        color: DUST_COLOR,
+        colorJitter: 0.25,
+        drift: 0,
+        spread: 0.12,
+      },
+      this.rng,
+    );
+  }
+
   /**
    * The crash: a heavy two-part burst — orange shrapnel thrown up and out, plus
    * a low sheet of dust off the road, so the impact has both a spark and a
@@ -393,6 +435,7 @@ export class ParticleFx {
     this.sparks.system.clear();
     this.debris.system.clear();
     this.dustTimer = 0;
+    this.smoulderTimer = 0;
     this.roadSpeed = 0;
     this.rng = createRng(PARTICLE_SEED);
     this.update(0);

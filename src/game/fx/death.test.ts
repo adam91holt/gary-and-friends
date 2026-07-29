@@ -76,7 +76,10 @@ describe('deathPose', () => {
     // He ends on his back — past 45° is unambiguously "toppled", and stopping
     // short of 90° keeps his face tilted toward the camera rather than flat to
     // the sky. Both bounds are the gag, not incidental numbers.
-    const { tip } = deathPose(DEATH_DURATION);
+    const { spin, tip } = deathPose(DEATH_DURATION);
+    // Pin the punchline's composition: Gary settles facing the front-left wreck
+    // camera, not yawed away into an anonymous orange silhouette.
+    expect(spin).toBeCloseTo(Math.PI * 2 + 0.6, 6);
     expect(tip).toBeGreaterThan(Math.PI / 4);
     expect(tip).toBeLessThan(Math.PI / 2);
   });

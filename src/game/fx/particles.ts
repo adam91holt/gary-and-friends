@@ -9,10 +9,10 @@
  * pure it is unit-tested at any timestep — the same deal the entity field made.
  *
  * ── Fade model ──────────────────────────────────────────────────────────────
- * Particles fade by darkening their per-vertex colour toward black. The render
- * pools use additive blending, where black contributes nothing. Retired slots
- * are also parked outside the scene, so inactive points are invisible even if a
- * material is changed later.
+ * Particles keep their per-vertex tint and fade through a separate alpha array.
+ * That lets sparks use additive blending while road grit uses normal blending
+ * without darkening into black smears. Retired slots are parked outside the
+ * scene and have zero alpha.
  */
 import type { Rng } from '../entities/rng.ts';
 
@@ -72,8 +72,10 @@ const DEAD_POSITION = 1_000_000;
 export class Particles {
   /** xyz per particle. Dead particles are parked outside the scene. */
   readonly positions: Float32Array;
-  /** rgb per particle, already faded. Dead particles are exactly black. */
+  /** rgb tint per particle. Dead particles are exactly black. */
   readonly colors: Float32Array;
+  /** Per-particle opacity, faded over life and zero for dead slots. */
+  readonly alphas: Float32Array;
 
   private readonly velocities: Float32Array;
   private readonly baseColors: Float32Array;
@@ -90,6 +92,7 @@ export class Particles {
     this.positions = new Float32Array(n * 3);
     this.positions.fill(DEAD_POSITION);
     this.colors = new Float32Array(n * 3);
+    this.alphas = new Float32Array(n);
     this.velocities = new Float32Array(n * 3);
     this.baseColors = new Float32Array(n * 3);
     this.life = new Float32Array(n);
@@ -155,6 +158,7 @@ export class Particles {
       this.colors[p] = this.baseColors[p];
       this.colors[p + 1] = this.baseColors[p + 1];
       this.colors[p + 2] = this.baseColors[p + 2];
+      this.alphas[slot] = 1;
 
       const span = life + rng() * lifeJitter;
       this.life[slot] = span;
@@ -192,10 +196,7 @@ export class Particles {
       this.positions[p + 2] += (this.velocities[p + 2] + this.drift[i]) * dt;
 
       const t = next / this.maxLife[i];
-      const brightness = Math.pow(t, fade);
-      this.colors[p] = this.baseColors[p] * brightness;
-      this.colors[p + 1] = this.baseColors[p + 1] * brightness;
-      this.colors[p + 2] = this.baseColors[p + 2] * brightness;
+      this.alphas[i] = Math.pow(t, fade);
     }
   }
 
@@ -210,6 +211,7 @@ export class Particles {
 
   private kill(index: number): void {
     this.life[index] = 0;
+    this.alphas[index] = 0;
     const p = index * 3;
     this.colors[p] = 0;
     this.colors[p + 1] = 0;

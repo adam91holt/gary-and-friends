@@ -47,20 +47,19 @@ const KNOCKBACK = 3.4;
 /** Sideways scatter on the punt, so he doesn't slide down a perfect rail. */
 const KNOCK_SIDE = 0.75;
 /**
- * Total spin over the animation (radians). A little short of a full turn, so he
- * comes to rest yawed toward the front-left wreck camera rather than square to
- * the road — both because a wreck that lands perfectly aligned looks placed
- * rather than thrown, and because this is the angle that leaves his face
- * pointed at the shot the game-over card is composed in.
+ * Total spin over the animation (radians). A little past a full turn, so he
+ * comes to rest yawed toward the front-left wreck camera rather than away from
+ * it — both because a wreck that lands perfectly aligned looks placed rather
+ * than thrown, and because this angle keeps his googly eyes clear in the shot.
  */
-const SPIN = Math.PI * 2 - 0.8;
+const SPIN = Math.PI * 2 + 0.6;
 /**
- * How far he tips over by the end (radians). A shade under 90°, so he ends on
- * his BACK with his googly eyes tilted up toward the camera. Which way he falls
+ * How far he tips over by the end (radians). Far enough to read as flattened,
+ * but lifted off 90° so his googly eyes clear the body's edge. Which way he falls
  * is the whole gag: face-down is a dead prop, face-up is a character who has
  * had a day — and the game-over card is looking straight at him.
  */
-const TIP = 1.35;
+const TIP = 1.05;
 
 export interface DeathPose {
   /** Non-uniform scale, volume-preserving. */

@@ -67,22 +67,24 @@ describe('Particles', () => {
     expect(system.positions[1]).toBeLessThan(startY);
   });
 
-  it('fades toward black over a particle life', () => {
+  it('fades alpha without muddying the particle tint', () => {
     const system = new Particles(CONFIG);
     system.emit(
       { ...BURST, count: 1, life: 0.5, lifeJitter: 0, colorJitter: 0 },
       createRng(6),
     );
-    const initial = system.colors[0];
-    expect(initial).toBeGreaterThan(0);
+    const initialColor = system.colors[0];
+    expect(initialColor).toBeGreaterThan(0);
+    expect(system.alphas[0]).toBe(1);
 
     for (let i = 0; i < 15; i++) system.update(1 / 60);
-    const mid = system.colors[0];
-    expect(mid).toBeLessThan(initial);
-    expect(mid).toBeGreaterThan(0);
+    expect(system.colors[0]).toBe(initialColor);
+    expect(system.alphas[0]).toBeLessThan(1);
+    expect(system.alphas[0]).toBeGreaterThan(0);
 
     for (let i = 0; i < 30; i++) system.update(1 / 60);
     expect(system.colors[0]).toBe(0);
+    expect(system.alphas[0]).toBe(0);
   });
 
   it('applies drift, so road dust travels with the road', () => {
@@ -102,6 +104,7 @@ describe('Particles', () => {
     system.clear();
     expect(system.aliveCount).toBe(0);
     expect(Array.from(system.colors).every((c) => c === 0)).toBe(true);
+    expect(Array.from(system.alphas).every((a) => a === 0)).toBe(true);
     expect(Array.from(system.positions).every((p) => p > 100_000)).toBe(true);
   });
 

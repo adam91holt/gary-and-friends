@@ -168,7 +168,14 @@ test('the death animation plays into gameover and throws debris', async ({
   expect(score).toBeGreaterThan(0);
   await expect(page.locator('#over-best-n')).toHaveText(String(score));
 
-  await page.waitForTimeout(700);
+  // The payoff declutters live telemetry and keeps breathing after the one-shot
+  // crash debris has expired: at this age, any live particles are the smoulder.
+  await expect(page.locator('#hud .playbar')).toHaveCSS('opacity', '0');
+  await expect(page.locator('#hud .roster')).toHaveCSS('opacity', '0');
+  await page.waitForTimeout(1_600);
+  expect(
+    await page.evaluate(() => window.__GARY__?.particles ?? 0),
+  ).toBeGreaterThan(0);
   await page.screenshot({
     path: 'test-results/juice-gameover.png',
     fullPage: true,
