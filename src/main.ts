@@ -307,12 +307,10 @@ window.addEventListener('keydown', (e) => {
 let lastTime = performance.now();
 let time = 0;
 
-/** Bound a genuinely suspended tab, then catch ordinary slow frames up in
- * small simulation steps. Capping every rendered frame at 50ms caused severe
- * time dilation under browser contention: traffic could not reach Gary before
- * a real-time interaction deadline. Substeps preserve lane-change and collision
- * geometry while keeping simulation time aligned with elapsed time. */
-const MAX_FRAME_DT = 0.35;
+/** Bound slow frames so traffic cannot jump an entire reaction window before
+ * input is observed. A modest catch-up allowance avoids severe time dilation
+ * under browser contention while preserving a dodgeable world at low FPS. */
+const MAX_FRAME_DT = 0.1;
 const SIMULATION_STEP = 0.05;
 
 function frame(now: number): void {
