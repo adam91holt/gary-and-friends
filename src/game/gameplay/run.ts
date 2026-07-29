@@ -60,7 +60,7 @@ export const NEAR_MISS_BONUS = 25;
  * How far ahead of Gary a vehicle starts counting as a "close approach" for
  * near-miss purposes. Roughly the length of a late swerve at speed.
  */
-export const NEAR_MISS_WINDOW = 8;
+export const NEAR_MISS_WINDOW = 12;
 
 /**
  * Where `__spawnFriend()` drops its friend: close enough that a test collects
