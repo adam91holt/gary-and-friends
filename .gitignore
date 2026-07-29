@@ -1,0 +1,16 @@
+node_modules
+dist
+playwright-report
+test-results
+.env
+.env.*
+!.env.example
+
+# build info / caches
+*.tsbuildinfo
+node_modules/.tmp
+
+# editor / OS
+.DS_Store
+.vscode
+.idea
