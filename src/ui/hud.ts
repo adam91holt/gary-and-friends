@@ -26,7 +26,7 @@ const icon = {
   friend: `<svg viewBox="0 0 24 24" ${ns}><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 6"/><path d="M17 14.4A5.5 5.5 0 0 1 20.5 20"/></svg>`,
   speed: `<svg viewBox="0 0 24 24" ${ns}><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-5"/><circle cx="12" cy="18" r="1"/></svg>`,
   play: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13l11-6.5z"/></svg>`,
-  crash: `<svg viewBox="0 0 24 24" ${ns}><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>`,
+  crash: `<svg viewBox="0 0 24 24" ${ns}><path d="M4 18h16L15.5 7h-7z"/><path d="M8 14h8M7 4 5.5 2M17 4l1.5-2M19 8l2-1"/></svg>`,
 };
 
 /* ── Component styles (tokens live in index.html :root) ────────────────────── */
@@ -141,6 +141,13 @@ const CSS = `
   font-size: var(--fs-label); letter-spacing: 0.1em; text-transform: uppercase;
 }
 #hud .legend b { color: var(--text-dim); font-weight: 700; }
+#hud .play-hint {
+  align-self: center; padding: 8px 11px; border-radius: 10px;
+  color: var(--text-faint); background: var(--surface-hud);
+  border: 1px solid var(--hairline); backdrop-filter: blur(10px);
+  font-size: var(--fs-label); letter-spacing: 0.08em; text-transform: uppercase;
+}
+#hud .play-hint b { color: var(--accent-2); }
 
 /* Telemetry readouts (instrument-dense). */
 #hud .readout {
@@ -178,9 +185,10 @@ const CSS = `
 #hud .speed .row { display: flex; align-items: center; gap: 10px; }
 #hud .bar { height: 4px; border-radius: 999px; background: var(--hairline); overflow: hidden; }
 #hud .bar > i {
-  display: block; height: 100%; width: 0%;
+  display: block; height: 100%; width: 100%;
+  transform: scaleX(0); transform-origin: left center;
   background: linear-gradient(90deg, var(--accent-2), var(--accent));
-  transition: width 0.25s var(--ease);
+  transition: transform 0.25s var(--ease);
 }
 
 /* Game-over stats. */
@@ -195,6 +203,21 @@ const CSS = `
 }
 #hud .crash { color: var(--danger); display: inline-grid; place-items: center; }
 #hud .crash svg { width: 40px; height: 40px; }
+#hud[data-screen="gameover"] .screen.gameover .crash,
+#hud[data-screen="gameover"] .screen.gameover .eyebrow,
+#hud[data-screen="gameover"] .screen.gameover .title,
+#hud[data-screen="gameover"] .screen.gameover .stats,
+#hud[data-screen="gameover"] .screen.gameover .btn {
+  animation: rise 0.4s var(--ease) backwards;
+}
+#hud[data-screen="gameover"] .screen.gameover .eyebrow { animation-delay: 60ms; }
+#hud[data-screen="gameover"] .screen.gameover .title { animation-delay: 120ms; }
+#hud[data-screen="gameover"] .screen.gameover .stats { animation-delay: 180ms; }
+#hud[data-screen="gameover"] .screen.gameover .btn { animation-delay: 240ms; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* ── Loading skeleton — shapes matching the final layout, with a shimmer. ─── */
 #hud .sk {
@@ -229,6 +252,11 @@ const CSS = `
   #hud .screen, #hud .playbar { transition: opacity 0.2s linear; transform: none !important; }
   #hud .btn, #hud .readout .val, #hud .bar > i { transition: none; }
   #hud .readout.bump .val { animation: none; }
+  #hud[data-screen="gameover"] .screen.gameover .crash,
+  #hud[data-screen="gameover"] .screen.gameover .eyebrow,
+  #hud[data-screen="gameover"] .screen.gameover .title,
+  #hud[data-screen="gameover"] .screen.gameover .stats,
+  #hud[data-screen="gameover"] .screen.gameover .btn,
   #hud .sk::after { animation: none; }
 }
 `;
@@ -252,10 +280,17 @@ export class Hud {
   private readonly friendsRO: HTMLElement;
   private readonly finalScore: HTMLElement;
   private readonly finalFriends: HTMLElement;
+  private readonly reducedMotion = window.matchMedia(
+    '(prefers-reduced-motion: reduce)',
+  );
+  private countFrame: number | null = null;
 
   private prev: GameState;
 
-  constructor(private readonly store: GameStore) {
+  constructor(
+    private readonly store: GameStore,
+    private readonly onUserGesture: () => void,
+  ) {
     const style = document.createElement('style');
     style.textContent = CSS;
     document.head.appendChild(style);
@@ -274,12 +309,14 @@ export class Hud {
     this.finalScore = this.q('#final-score');
     this.finalFriends = this.q('#final-friends');
 
-    this.q<HTMLButtonElement>('#startBtn').addEventListener('click', () =>
-      this.store.start(),
-    );
-    this.q<HTMLButtonElement>('#restartBtn').addEventListener('click', () =>
-      this.store.start(),
-    );
+    this.q<HTMLButtonElement>('#startBtn').addEventListener('click', () => {
+      this.onUserGesture();
+      this.store.start();
+    });
+    this.q<HTMLButtonElement>('#restartBtn').addEventListener('click', () => {
+      this.onUserGesture();
+      this.store.start();
+    });
 
     this.prev = this.store.getState();
     this.store.subscribe((s) => this.render(s));
@@ -300,15 +337,49 @@ export class Hud {
     this.friendsVal.textContent = String(s.friends);
     this.speedVal.textContent = String(Math.round(s.speed * 4)); // stylised km/h
     const throttle = Math.max(0, Math.min(1, s.speed / (BASE_SPEED * 1.5)));
-    this.speedFill.style.width = `${(throttle * 100).toFixed(0)}%`;
+    this.speedFill.style.transform = `scaleX(${throttle.toFixed(3)})`;
 
     if (s.score !== this.prev.score) this.flash(this.scoreRO);
     if (s.friends !== this.prev.friends) this.flash(this.friendsRO);
 
-    this.finalScore.textContent = String(s.score);
-    this.finalFriends.textContent = String(s.friends);
+    if (s.status === 'gameover' && this.prev.status !== 'gameover') {
+      this.countFinalStats(s.score, s.friends);
+    } else if (s.status !== 'gameover') {
+      this.cancelCount();
+      this.finalScore.textContent = String(s.score);
+      this.finalFriends.textContent = String(s.friends);
+    }
 
     this.prev = s;
+  }
+
+  private countFinalStats(score: number, friends: number): void {
+    this.cancelCount();
+    if (this.reducedMotion.matches) {
+      this.finalScore.textContent = String(score);
+      this.finalFriends.textContent = String(friends);
+      return;
+    }
+
+    const start = performance.now();
+    const duration = 500;
+    const tick = (now: number): void => {
+      const progress = Math.min(1, (now - start) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      this.finalScore.textContent = String(Math.round(score * eased));
+      this.finalFriends.textContent = String(Math.round(friends * eased));
+      this.countFrame =
+        progress < 1 ? requestAnimationFrame(tick) : null;
+    };
+    this.finalScore.textContent = '0';
+    this.finalFriends.textContent = '0';
+    this.countFrame = requestAnimationFrame(tick);
+  }
+
+  private cancelCount(): void {
+    if (this.countFrame === null) return;
+    cancelAnimationFrame(this.countFrame);
+    this.countFrame = null;
   }
 
   private flash(el: HTMLElement): void {
@@ -347,7 +418,6 @@ export class Hud {
             keep it clean, and pick up a friend or two.</p>
           <button class="btn" id="startBtn">${icon.play}<span>Start run</span></button>
           <div class="legend">
-            <span><b>&larr; &rarr;</b> Switch lane</span>
             <span><b>Space</b> Start</span>
           </div>
         </div>
@@ -369,6 +439,7 @@ export class Hud {
           </div>
           <div class="bar"><i></i></div>
         </div>
+        <div class="play-hint"><b>&larr; &rarr;</b> Switch lane</div>
       </div>
 
       <div class="screen gameover">

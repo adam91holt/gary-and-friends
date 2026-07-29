@@ -18,8 +18,9 @@ test('menu and game-over preserve Gary lane', async ({ page }) => {
   await page.keyboard.press('ArrowRight');
   expect(await page.evaluate(() => window.__GARY__?.lane)).toBe(1);
 
+  // A real gesture exercises the AudioContext unlock path before the crash cue.
+  await page.locator('#startBtn').click();
   await page.evaluate(() => {
-    window.__GARY__?.start();
     window.__GARY__?.__setLane(2);
     window.__GARY__?.__forceCollision();
   });

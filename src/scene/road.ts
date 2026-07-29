@@ -1,12 +1,17 @@
 import {
   BoxGeometry,
+  type BufferGeometry,
   CylinderGeometry,
+  DynamicDrawUsage,
   Group,
+  InstancedMesh,
+  Matrix4,
   Mesh,
   MeshStandardMaterial,
-  type Object3D,
 } from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CENTER_LANE, LANE_COUNT } from '../game/state.ts';
+import { ACCENT, ACCENT_2 } from '../theme.ts';
 
 /**
  * The scrolling highway environment: a 3-lane road, recycled dashed lane
@@ -37,14 +42,30 @@ export function laneToX(lane: number): number {
 const NEAR_Z = 14;
 
 interface Scroller {
-  readonly node: Object3D;
+  readonly mesh: InstancedMesh;
+  readonly x: Float32Array;
+  readonly y: Float32Array;
+  readonly z: Float32Array;
   /** Total length of this prop family's cycle; wrapping subtracts it. */
   readonly span: number;
+}
+
+function translated(geometry: BufferGeometry, x: number, y: number, z: number): BufferGeometry {
+  const copy = geometry.clone();
+  copy.applyMatrix4(new Matrix4().makeTranslation(x, y, z));
+  return copy;
+}
+
+function merged(geometries: BufferGeometry[]): BufferGeometry {
+  const geometry = mergeGeometries(geometries, true);
+  if (geometry === null) throw new Error('Could not merge procedural road geometry');
+  return geometry;
 }
 
 export class Road {
   readonly group = new Group();
   private readonly scrollers: Scroller[] = [];
+  private readonly instanceMatrix = new Matrix4();
 
   // Shared materials (built once, reused across every pooled prop).
   private readonly asphalt = new MeshStandardMaterial({
@@ -58,7 +79,7 @@ export class Road {
     metalness: 0.0,
   });
   private readonly edgeLine = new MeshStandardMaterial({
-    color: 0xff7a1a,
+    color: ACCENT,
     roughness: 0.5,
     metalness: 0.0,
   });
@@ -73,8 +94,8 @@ export class Road {
     metalness: 0.5,
   });
   private readonly lampGlow = new MeshStandardMaterial({
-    color: 0xffb347,
-    emissive: 0xff8c1a,
+    color: ACCENT_2,
+    emissive: ACCENT,
     emissiveIntensity: 1.6,
     roughness: 0.4,
   });
@@ -87,15 +108,37 @@ export class Road {
     this.buildStreetlights();
   }
 
-  /** Scroll the world toward the camera by `speed` units/sec, wrapping props. */
+  /** Scroll each instanced prop family, then upload one matrix buffer per family. */
   update(dt: number, speed: number): void {
     const dz = speed * dt;
     if (dz === 0) return;
-    for (const s of this.scrollers) {
-      let z = s.node.position.z + dz;
-      if (z > NEAR_Z) z -= s.span;
-      s.node.position.z = z;
+    for (const scroller of this.scrollers) {
+      for (let i = 0; i < scroller.z.length; i++) {
+        let z = scroller.z[i] + dz;
+        if (z > NEAR_Z) z -= scroller.span;
+        scroller.z[i] = z;
+        this.instanceMatrix.makeTranslation(scroller.x[i], scroller.y[i], z);
+        scroller.mesh.setMatrixAt(i, this.instanceMatrix);
+      }
+      scroller.mesh.instanceMatrix.needsUpdate = true;
     }
+  }
+
+  private addScroller(
+    mesh: InstancedMesh,
+    x: Float32Array,
+    y: Float32Array,
+    z: Float32Array,
+    span: number,
+  ): void {
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    for (let i = 0; i < z.length; i++) {
+      this.instanceMatrix.makeTranslation(x[i], y[i], z[i]);
+      mesh.setMatrixAt(i, this.instanceMatrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    this.group.add(mesh);
+    this.scrollers.push({ mesh, x, y, z, span });
   }
 
   // ── construction ─────────────────────────────────────────────────────────
@@ -118,76 +161,82 @@ export class Road {
   }
 
   private buildLaneDashes(): void {
-    const geom = new BoxGeometry(0.14, 0.02, 1.6);
-    const count = 40;
+    const geometry = new BoxGeometry(0.14, 0.02, 1.6);
+    const perLane = 40;
     const spacing = 4;
-    const span = count * spacing;
-    // Two separators, at the boundaries between the three lanes.
-    for (const x of [-LANE_WIDTH / 2, LANE_WIDTH / 2]) {
-      for (let i = 0; i < count; i++) {
-        const dash = new Mesh(geom, this.marking);
-        dash.position.set(x, 0.011, NEAR_Z - i * spacing);
-        this.group.add(dash);
-        this.scrollers.push({ node: dash, span });
+    const total = perLane * 2;
+    const x = new Float32Array(total);
+    const y = new Float32Array(total);
+    const z = new Float32Array(total);
+    let instance = 0;
+    for (const laneX of [-LANE_WIDTH / 2, LANE_WIDTH / 2]) {
+      for (let i = 0; i < perLane; i++) {
+        x[instance] = laneX;
+        y[instance] = 0.011;
+        z[instance] = NEAR_Z - i * spacing;
+        instance++;
       }
     }
+    const mesh = new InstancedMesh(geometry, this.marking, total);
+    mesh.name = 'LaneDashes';
+    this.addScroller(mesh, x, y, z, perLane * spacing);
   }
 
   private buildBarriers(): void {
-    const railGeom = new BoxGeometry(0.16, 0.5, 2.6);
-    const postGeom = new BoxGeometry(0.16, 0.7, 0.16);
-    const count = 34;
     const spacing = 3.2;
-    const span = count * spacing;
+    const geometry = merged([
+      translated(new BoxGeometry(0.16, 0.5, 2.6), 0, 0.55, 0),
+      translated(new BoxGeometry(0.16, 0.7, 0.16), 0, 0.35, -spacing / 2),
+    ]);
+    const perSide = 34;
+    const total = perSide * 2;
+    const x = new Float32Array(total);
+    const y = new Float32Array(total);
+    const z = new Float32Array(total);
+    let instance = 0;
     for (const side of [-1, 1]) {
-      const x = side * (ROAD_HALF + 0.35);
-      for (let i = 0; i < count; i++) {
-        const seg = new Group();
-        seg.position.set(x, 0, NEAR_Z - i * spacing);
-
-        const rail = new Mesh(railGeom, this.railMetal);
-        rail.position.y = 0.55;
-        seg.add(rail);
-
-        const post = new Mesh(postGeom, this.poleMetal);
-        post.position.y = 0.35;
-        post.position.z = -spacing / 2;
-        seg.add(post);
-
-        this.group.add(seg);
-        this.scrollers.push({ node: seg, span });
+      for (let i = 0; i < perSide; i++) {
+        x[instance] = side * (ROAD_HALF + 0.35);
+        z[instance] = NEAR_Z - i * spacing;
+        instance++;
       }
     }
+    const mesh = new InstancedMesh(
+      geometry,
+      [this.railMetal, this.poleMetal],
+      total,
+    );
+    mesh.name = 'Barriers';
+    this.addScroller(mesh, x, y, z, perSide * spacing);
   }
 
   private buildStreetlights(): void {
-    const poleGeom = new CylinderGeometry(0.09, 0.11, 5, 8);
-    const armGeom = new BoxGeometry(1.2, 0.1, 0.1);
-    const lampGeom = new BoxGeometry(0.5, 0.16, 0.3);
-    const count = 7;
+    const geometry = merged([
+      translated(new CylinderGeometry(0.09, 0.11, 5, 8), 0, 2.5, 0),
+      translated(new BoxGeometry(2.4, 0.1, 0.1), 0, 4.9, 0),
+      translated(new BoxGeometry(0.5, 0.16, 0.3), -1.15, 4.82, 0),
+      translated(new BoxGeometry(0.5, 0.16, 0.3), 1.15, 4.82, 0),
+    ]);
+    const perSide = 7;
     const spacing = 22;
-    const span = count * spacing;
+    const total = perSide * 2;
+    const x = new Float32Array(total);
+    const y = new Float32Array(total);
+    const z = new Float32Array(total);
+    let instance = 0;
     for (const side of [-1, 1]) {
-      const x = side * (ROAD_HALF + 1.1);
-      for (let i = 0; i < count; i++) {
-        const light = new Group();
-        light.position.set(x, 0, NEAR_Z - i * spacing);
-
-        const pole = new Mesh(poleGeom, this.poleMetal);
-        pole.position.y = 2.5;
-        light.add(pole);
-
-        const arm = new Mesh(armGeom, this.poleMetal);
-        arm.position.set(side * -0.6, 4.9, 0);
-        light.add(arm);
-
-        const lamp = new Mesh(lampGeom, this.lampGlow);
-        lamp.position.set(side * -1.15, 4.82, 0);
-        light.add(lamp);
-
-        this.group.add(light);
-        this.scrollers.push({ node: light, span });
+      for (let i = 0; i < perSide; i++) {
+        x[instance] = side * (ROAD_HALF + 1.1);
+        z[instance] = NEAR_Z - i * spacing;
+        instance++;
       }
     }
+    const mesh = new InstancedMesh(
+      geometry,
+      [this.poleMetal, this.poleMetal, this.lampGlow, this.lampGlow],
+      total,
+    );
+    mesh.name = 'Streetlights';
+    this.addScroller(mesh, x, y, z, perSide * spacing);
   }
 }

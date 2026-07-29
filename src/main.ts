@@ -27,15 +27,16 @@ import {
   Scene,
   WebGLRenderer,
 } from 'three';
+import { GameAudio } from './audio.ts';
 import { GameStore } from './game/state.ts';
 import { createGary } from './scene/gary.ts';
 import { laneToX, Road } from './scene/road.ts';
-import { Hud } from './ui/hud.ts';
 import { installTestApi, type GaryTestHooks } from './testApi.ts';
-
-const BG = 0x0e0e18;
+import { BG } from './theme.ts';
+import { Hud } from './ui/hud.ts';
 
 const store = new GameStore();
+const audio = new GameAudio();
 
 // Honour the OS reduced-motion preference in the 3D layer too, not just CSS:
 // camera sweeps snap instead of easing, and Gary's idle bob is stilled.
@@ -146,8 +147,29 @@ const gary = createGary();
 gary.position.set(laneToX(store.getState().lane), 0, 0);
 scene.add(gary);
 
+// Render-local feel state. It reacts to store transitions without becoming game
+// state: visual speed coasts, while crash spin/shake decay independently.
+let visualSpeed = store.getState().speed;
+let shake = 0;
+let crashSpinTarget = 0;
+let previousState = store.getState();
+store.subscribe((state) => {
+  if (state.status !== previousState.status) {
+    if (state.status === 'playing') audio.start();
+    if (state.status === 'gameover') {
+      audio.crash();
+      shake = reducedMotion ? 0 : 0.2;
+      crashSpinTarget = gary.rotation.y + 2;
+    }
+  }
+  if (state.status === 'playing' && state.lane !== previousState.lane) {
+    audio.lane();
+  }
+  previousState = state;
+});
+
 // DOM overlay (menu / HUD / gameover / loading skeleton).
-const hud = new Hud(store);
+const hud = new Hud(store, () => audio.unlock());
 
 function onResize(): void {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -163,18 +185,23 @@ window.addEventListener('keydown', (e) => {
     case 'ArrowLeft':
     case 'a':
     case 'A':
+      if (status === 'playing') audio.unlock();
       store.setLane(lane - 1);
       e.preventDefault();
       break;
     case 'ArrowRight':
     case 'd':
     case 'D':
+      if (status === 'playing') audio.unlock();
       store.setLane(lane + 1);
       e.preventDefault();
       break;
     case ' ':
     case 'Enter':
-      if (status !== 'playing') store.start();
+      if (status !== 'playing') {
+        audio.unlock();
+        store.start();
+      }
       e.preventDefault();
       break;
     default:
@@ -194,7 +221,15 @@ function frame(now: number): void {
   const s = store.getState();
   const menuFraming = s.status === 'menu';
 
-  road.update(dt, s.speed);
+  visualSpeed = reducedMotion
+    ? s.speed
+    : MathUtils.damp(
+        visualSpeed,
+        s.speed,
+        s.status === 'gameover' ? 2.2 : 1.6,
+        dt,
+      );
+  road.update(dt, visualSpeed);
 
   // Gary eases toward his lane's X, banking into the move for some juice.
   const targetX = laneToX(s.lane);
@@ -206,14 +241,22 @@ function frame(now: number): void {
     9,
     dt,
   );
-  // Idle bob stays at or above the road surface (stilled for reduced motion).
-  gary.position.y = reducedMotion ? 0 : 0.04 + Math.sin(time * 2.4) * 0.04;
-  // On the menu he turns to face the hero camera; in play he squares up to the
-  // road ahead. Same damped-transition idea as the camera rigs.
+  // Bob only while Gary is alive; a collision topples and spins the whole cone.
+  const canBob = s.status === 'playing' || s.status === 'menu';
+  gary.position.y =
+    reducedMotion || !canBob ? 0 : 0.04 + Math.sin(time * 2.4) * 0.04;
+  gary.rotation.x = MathUtils.damp(
+    gary.rotation.x,
+    s.status === 'gameover' ? -1.35 : 0,
+    reducedMotion ? 1e3 : 7,
+    dt,
+  );
+  const yawTarget =
+    s.status === 'gameover' ? crashSpinTarget : menuFraming ? -0.42 : 0;
   gary.rotation.y = MathUtils.damp(
     gary.rotation.y,
-    menuFraming ? -0.42 : 0,
-    reducedMotion ? 1e3 : 3.2,
+    yawTarget,
+    reducedMotion ? 1e3 : s.status === 'gameover' ? 7 : 3.2,
     dt,
   );
 
@@ -231,6 +274,14 @@ function frame(now: number): void {
   camera.position.x = MathUtils.damp(camera.position.x, camTargetX, camLambda, dt);
   camera.position.y = MathUtils.damp(camera.position.y, rig.pos.y, camLambda, dt);
   camera.position.z = MathUtils.damp(camera.position.z, rig.pos.z, camLambda, dt);
+
+  if (!reducedMotion && shake > 0.001) {
+    shake *= Math.exp(-6 * dt);
+    camera.position.x += shake * Math.sin(time * 60);
+    camera.position.y += shake * Math.cos(time * 53);
+  } else {
+    shake = 0;
+  }
 
   lookAt.x = MathUtils.damp(lookAt.x, lookTargetX, camLambda, dt);
   lookAt.y = MathUtils.damp(lookAt.y, rig.look.y, camLambda, dt);

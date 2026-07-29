@@ -5,6 +5,7 @@ import {
   MeshStandardMaterial,
   SphereGeometry,
 } from 'three';
+import { ACCENT } from '../theme.ts';
 
 /**
  * Procedural "Gary": an orange road cone with two white stripe bands and a pair
@@ -22,7 +23,7 @@ export function createGary(): Group {
   gary.name = 'Gary';
 
   const coneOrange = new MeshStandardMaterial({
-    color: 0xff7a1a,
+    color: ACCENT,
     roughness: 0.55,
     metalness: 0.05,
   });

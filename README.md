@@ -90,8 +90,10 @@ friend-spawning lands (ticket 02).
   `window.__GARY__` (getters) and exposes the deterministic `__`-hooks.
 - **Rendering (three.js, browser-only):** `src/main.ts` (scene, fog, the two
   camera rigs + animation loop), `src/scene/gary.ts` (procedural googly-eyed cone) and
-  `src/scene/road.ts` (`Road`: 3-lane highway with recycled dash/barrier/light
-  props scrolled by `speed`). This side *reads* the store and never owns state.
+  `src/scene/road.ts` (`Road`: 3-lane highway with instanced, recycled
+  dash/barrier/light families scrolled by visual speed). `src/audio.ts` owns the
+  gesture-unlocked synth feedback, and `src/theme.ts` pins the 3D brand tokens to
+  their CSS counterparts. This side *reads* the store and never owns state.
 - **DOM overlay:** `src/ui/hud.ts` — menu / telemetry HUD / game-over card and
   the async loading skeleton, a projection of the store like the test API.
 - **Browser e2e:** `e2e/smoke.spec.ts`.
@@ -111,9 +113,10 @@ Keeping state out of the renderer is what makes the game testable both fast
 - **Reduced motion is honoured in 3D, not just CSS.** `prefers-reduced-motion`
   snaps the rig transition and stills Gary's idle bob (`reducedMotion` in
   `main.ts`), matching the media query in `hud.ts`.
-- **Design tokens live in `index.html` `:root`** — dark surfaces, the single
-  owned `--accent` (Gary orange, also reused by the road's edge lines and lamp
-  glow), and the type scale. Never hard-code a hex in a component.
+- **Design tokens are shared across DOM and WebGL.** CSS tokens live in
+  `index.html` `:root`; `src/theme.ts` mirrors `--accent`, `--accent-2`, and
+  `--bg` as numeric three.js colors used by Gary, the road, fog, and renderer.
+  Keep the two token layers pinned rather than hard-coding a component color.
 - **The display face is self-hosted**, not merely named:
   `@fontsource-variable/space-grotesk` is imported in `main.ts` so Vite bundles
   it (no CDN at runtime) and `--font-display` actually renders in its intended
