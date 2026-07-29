@@ -174,11 +174,34 @@ describe('Run: collision', () => {
     expect(store.getState().status).toBe('gameover');
   });
 
+  it('prevents traffic from remaining superimposed on an existing friend', () => {
+    const { store, run } = playing();
+    run.friends.inject(friendSpec(1, 0, -149.9));
+    run.traffic.inject({
+      kind: TRAFFIC_KIND,
+      lane: 1,
+      z: -150,
+      speed: 7,
+      halfWidth: 0.58,
+      halfDepth: 1.25,
+      variant: 1,
+    });
+
+    run.update(1 / 60);
+    expect(store.getState().status).toBe('playing');
+    expect(run.friends.activeCount).toBe(1);
+    expect(run.traffic.activeCount).toBe(1);
+    const friend = run.friends.entities.find((entity) => entity.active);
+    const traffic = run.traffic.entities.find((entity) => entity.active);
+    expect(friend?.lane).not.toBe(traffic?.lane);
+  });
+
   it('survives a long clean run when Gary can be steered (spawns stay fair)', () => {
     const { store, run } = playing();
     // A simple bot: pick the lane with the most clear road, but move its collider
     // with the renderer's real damping rate rather than teleporting lane-to-lane.
     let garyX = laneToX(store.getState().lane);
+    let crashedAt = -1;
     for (let i = 0; i < 5000; i++) {
       const clearance = [0, 1, 2].map((lane) => {
         let nearest = Infinity;
@@ -200,11 +223,19 @@ describe('Run: collision', () => {
       garyX = targetX + (garyX - targetX) * Math.exp(-9 / 60);
       run.setGaryX(garyX);
       run.update(1 / 60);
-      if (store.getState().status !== 'playing') break;
+      if (store.getState().status !== 'playing') {
+        crashedAt = i;
+        break;
+      }
     }
     // ~83 seconds of simulated play, deep into the speed ramp, without an
     // unavoidable wall of traffic. This is the fairness guarantee end to end.
-    expect(store.getState().status).toBe('playing');
+    expect(
+      store.getState().status,
+      `crashed at frame ${crashedAt}; Gary x=${garyX}; traffic=${JSON.stringify(
+        run.traffic.entities.filter((entity) => entity.active),
+      )}`,
+    ).toBe('playing');
   });
 });
 
@@ -606,12 +637,34 @@ describe('Run: the __spawnFriend hook', () => {
     expect(run.spawnFriend()).toBeNull();
   });
 
-  it('always finds a slot, even with the field at capacity', () => {
+  it('does not evict a still-collectible friend when the field is full', () => {
     const { run } = playing();
-    for (let i = 0; i < FRIEND_CAPACITY + 4; i++) {
+    for (let i = 0; i < FRIEND_CAPACITY; i++) {
       expect(run.spawnFriend()).not.toBeNull();
     }
-    expect(run.friends.activeCount).toBeLessThanOrEqual(FRIEND_CAPACITY);
+    const liveIds = run.friends.entities
+      .filter((entity) => entity.active)
+      .map((entity) => entity.id);
+
+    expect(run.spawnFriend()).toBeNull();
+    expect(
+      run.friends.entities
+        .filter((entity) => entity.active)
+        .map((entity) => entity.id),
+    ).toEqual(liveIds);
+  });
+
+  it('reuses a full-field slot only after that friend has passed Gary', () => {
+    const { run } = playing();
+    for (let i = 0; i < FRIEND_CAPACITY; i++) run.spawnFriend();
+    const passed = run.friends.entities.find((entity) => entity.active);
+    expect(passed).toBeDefined();
+    if (!passed) return;
+    passed.z = GARY_Z + passed.halfDepth + 1;
+    passed.prevZ = passed.z;
+
+    expect(run.spawnFriend()).not.toBeNull();
+    expect(run.friends.activeCount).toBe(FRIEND_CAPACITY);
   });
 });
 

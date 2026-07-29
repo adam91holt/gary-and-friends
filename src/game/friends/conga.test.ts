@@ -4,8 +4,10 @@ import {
   CONGA_MIN_SPACING,
   CONGA_TAIL_LENGTH,
   CongaLine,
+  congaFootprintScale,
   congaSpacing,
 } from './conga.ts';
+import { FRIENDS } from './roster.ts';
 
 /** Drive a line forward at constant speed with the leader parked at `x`. */
 function cruise(
@@ -45,10 +47,20 @@ describe('congaSpacing', () => {
     for (let n = 1; n <= floorAt; n++) {
       expect(n * congaSpacing(n)).toBeLessThanOrEqual(CONGA_TAIL_LENGTH + 1e-9);
     }
-    // Past the crossover the floor wins, because interpenetrating cones would
-    // look worse than a tail that runs slightly long.
+    // Past the crossover the floor wins; the renderer scales broad footprints
+    // to that gap rather than letting the tail run out of frame.
     expect(congaSpacing(floorAt + 20)).toBe(CONGA_MIN_SPACING);
     expect((floorAt + 20) * CONGA_MIN_SPACING).toBeGreaterThan(CONGA_TAIL_LENGTH);
+  });
+
+  it('scales the widest rendered cone to fit every live gap', () => {
+    const widestDiameter = Math.max(
+      ...FRIENDS.map((friend) => friend.baseRadius * 2 * 1.15),
+    );
+    for (const count of [1, 5, 20, 100]) {
+      const rendered = widestDiameter * congaFootprintScale(count, widestDiameter);
+      expect(rendered).toBeLessThanOrEqual(congaSpacing(count) + 1e-9);
+    }
   });
 });
 
@@ -189,6 +201,21 @@ describe('CongaLine: follow behaviour', () => {
       expect(Number.isFinite(m.x)).toBe(true);
       expect(Math.abs(m.x)).toBeLessThanOrEqual(2.5);
     }
+  });
+
+  it('retains enough history for the rear of a long convoy', () => {
+    const line = new CongaLine();
+    for (let i = 0; i < 20; i++) line.join(i % 5, `f${i}`);
+    cruise(line, 3, 24, -2.4);
+    cruise(line, 0.45, 24, 2.4);
+
+    // Twenty members need more history than the nominal camera-length budget.
+    // The rear should still be replaying the old lane, not clamped to the first
+    // retained breadcrumb and snapping right as one rigid block.
+    expect(line.members[line.members.length - 1].x).toBeLessThan(-1);
+    expect(line.members[12].x).toBeGreaterThan(
+      line.members[line.members.length - 1].x,
+    );
   });
 });
 

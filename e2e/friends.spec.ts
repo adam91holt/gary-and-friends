@@ -61,28 +61,44 @@ async function collect(
     const sleep = (ms: number): Promise<void> =>
       new Promise((resolve) => setTimeout(resolve, ms));
     const deadline = performance.now() + 25_000;
-    let pending = false;
+    let pendingCount: number | null = null;
+    let pendingSince = 0;
 
     while (performance.now() < deadline && api.friends < want) {
       if (api.state !== 'playing') {
         api.start();
-        pending = false;
+        pendingCount = null;
         await sleep(120);
         continue;
       }
-      // Keep clear of oncoming traffic; only spawn a friend on a clear stretch,
-      // so the pickup isn't racing a vehicle into the same patch of road.
-      const nearest = api.nearestAhead;
-      if (nearest && nearest.distance < 34) {
-        api.__setLane(nearest.lane === 0 ? 1 : 0);
-        pending = false;
-      } else if (!pending) {
-        api.__spawnFriend();
-        pending = true;
+
+      // Keep exactly one deterministic pickup outstanding. Its completion is
+      // observed through the live count rather than inferred from stale traffic
+      // sampled before the spawn.
+      if (pendingCount !== null) {
+        if (api.friends > pendingCount) {
+          pendingCount = null;
+          continue;
+        }
+        // A natural friend can briefly fill the small pool; retry if the hook had
+        // no slot or if the injected pickup was missed after a lane change.
+        if (performance.now() - pendingSince > 1_500) pendingCount = null;
+        await sleep(32);
+        continue;
       }
-      if (api.conga >= want) break;
+
+      // Only leave the current lane when the nearest threat is actually in it.
+      // Once a friend is spawned we hold that clear lane until collection.
+      const nearest = api.nearestAhead;
+      if (nearest && nearest.distance < 34 && nearest.lane === api.lane) {
+        api.__setLane((api.lane + 1) % 3);
+        await sleep(80);
+        continue;
+      }
+      pendingCount = api.friends;
+      pendingSince = performance.now();
+      api.__spawnFriend();
       await sleep(32);
-      if (pending && (!nearest || nearest.distance > 34)) pending = false;
     }
     return api.friends;
   }, target);
@@ -153,7 +169,8 @@ test('friends spawn, are collected, grow the conga line, and reset', async ({
     points: document.getElementById('collect-pts')?.textContent ?? '',
   }));
   expect(ROSTER).toContain(flourish.name);
-  expect(flourish.points).toMatch(/^\+\d+$/);
+  expect(flourish.points).toMatch(/^\+[1-9]\d*$/);
+  expect(Number(flourish.points.slice(1))).toBeGreaterThanOrEqual(120);
 
   // ── Visual artifact: Gary leading his conga line, with the HUD counter ───
   // Let the roster chips finish their 0.25s light-up transition first, or the
@@ -176,11 +193,16 @@ test('friends spawn, are collected, grow the conga line, and reset', async ({
   });
 
   // ── Restart clears the line and zeroes the counter ──────────────────────
+  // Exercise the real gameover -> playing transition. Collision resolution may
+  // land on a later simulation frame, so do not race start() against it.
+  await page.evaluate(() => window.__GARY__?.__forceCollision());
+  await expect
+    .poll(() => page.evaluate(() => window.__GARY__?.state))
+    .toBe('gameover');
   // Read the reset state in the SAME evaluate that restarts, so no animation
   // frame can collect something between the two and make this flaky.
   const restarted = await page.evaluate(() => {
     const api = window.__GARY__;
-    api?.__forceCollision();
     api?.start();
     return {
       state: api?.state,

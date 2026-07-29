@@ -787,9 +787,9 @@ export class Hud {
 
       <div class="collect" id="collect">
         ${icon.cone}
-        <span class="who" id="collect-name">Coneelia</span>
+        <span class="who" id="collect-name"></span>
         <span class="joined">joined</span>
-        <span class="pts" id="collect-pts">+0</span>
+        <span class="pts" id="collect-pts"></span>
       </div>
 
       <div class="screen gameover">

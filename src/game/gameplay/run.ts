@@ -205,11 +205,13 @@ export class Run {
     const delta = target - state.score;
     if (delta > 0) this.store.addScore(delta);
 
-    // 3. Move + recycle + spawn both fields at the *new* speed. Traffic is
-    //    passed to the friend field as external occupancy, so a friend is never
-    //    dropped inside a car — the reward can't be a trap.
+    // 3. Move + recycle + spawn both fields at the *new* speed. Friends already
+    //    use traffic as external occupancy. Traffic keeps its seeded lane stream,
+    //    then yields any exact cross-field overlap to the collectible so a reward
+    //    can never arrive hidden inside a fatal hitbox.
     const speed = this.store.getState().speed;
     this.traffic.update(dt, speed);
+    this.separateCrossFieldSpawns();
     this.friends.update(dt, speed, this.traffic.entities);
 
     // 4. Drag the conga line along Gary's path. Done every tick (not only on a
@@ -241,6 +243,55 @@ export class Run {
     }
 
     this.scoreNearMisses();
+  }
+
+  /**
+   * Separate independent beats that land a car inside a collectible. Both kinds
+   * close at the same speed, so a spawn overlap would otherwise remain locked all
+   * the way to Gary. Move the still-distant reward to a clear lane, preserving
+   * the traffic stream and its fairness cadence; only discard the car if every
+   * lane is genuinely occupied at that exact depth.
+   */
+  private separateCrossFieldSpawns(): void {
+    for (const friend of this.friends.entities) {
+      if (!friend.active || friend.kind !== FRIEND_KIND) continue;
+      const overlapping = this.traffic.entities.find(
+        (traffic) =>
+          traffic.active &&
+          traffic.kind === TRAFFIC_KIND &&
+          traffic.lane === friend.lane &&
+          Math.abs(traffic.z - friend.z) <=
+            traffic.halfDepth + friend.halfDepth,
+      );
+      if (!overlapping) continue;
+
+      let clearLane: number | null = null;
+      for (let lane = 0; lane < LANE_COUNT; lane++) {
+        const occupiedByTraffic = this.traffic.entities.some(
+          (traffic) =>
+            traffic.active &&
+            traffic.kind === TRAFFIC_KIND &&
+            traffic.lane === lane &&
+            Math.abs(traffic.z - friend.z) <=
+              traffic.halfDepth + friend.halfDepth,
+        );
+        const occupiedByFriend = this.friends.entities.some(
+          (other) =>
+            other !== friend &&
+            other.active &&
+            other.kind === FRIEND_KIND &&
+            other.lane === lane &&
+            Math.abs(other.z - friend.z) <= other.halfDepth + friend.halfDepth,
+        );
+        if (!occupiedByTraffic && !occupiedByFriend) {
+          clearLane = lane;
+          break;
+        }
+      }
+
+      if (clearLane === null) this.traffic.despawn(overlapping);
+      else friend.lane = clearLane;
+    }
   }
 
   /**
@@ -350,10 +401,17 @@ export class Run {
     if (this.store.getState().status !== 'playing') return null;
 
     const variant = this.injectCursor % FRIEND_COUNT;
-    // Guarantee a slot even at capacity — the hook owns what it injects.
     if (this.friends.activeCount === this.friends.entities.length) {
-      const first = this.friends.entities.find((entity) => entity.active);
-      if (first) this.friends.despawn(first);
+      // Never make a visible, still-collectible friend vanish to service a test
+      // hook. Reuse only a cone that has already passed Gary and is merely
+      // waiting for the normal recycle boundary; otherwise let the caller retry.
+      const passed = this.friends.entities
+        .filter(
+          (entity) => entity.active && entity.z - entity.halfDepth > GARY_Z,
+        )
+        .sort((a, b) => b.z - a.z)[0];
+      if (!passed) return null;
+      this.friends.despawn(passed);
     }
     const injected = this.friends.inject(
       friendSpec(this.store.getState().lane, variant, TEST_FRIEND_SPAWN_Z),

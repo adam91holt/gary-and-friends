@@ -25,9 +25,9 @@
 /** Ideal gap between friends when the line is short (world units). */
 export const CONGA_MAX_SPACING = 1.3;
 /**
- * Floor on the gap once the line is long. Sized past the base radius of the
- * widest friend (Big Dave), because below this the cones interpenetrate and
- * the line stops reading as a queue of characters.
+ * Floor on the gap once the line is long. The renderer scales conga footprints
+ * to this live gap, preserving separate silhouettes without letting the tail
+ * disappear behind the chase camera.
  */
 export const CONGA_MIN_SPACING = 0.68;
 /**
@@ -70,7 +70,7 @@ function damp(current: number, target: number, lambda: number, dt: number): numb
 
 /**
  * Gap between friends for a line of `count`. Shrinks as the line grows so the
- * whole convoy stays in frame, but never below the width of a cone.
+ * whole convoy stays in frame; the renderer fits broad footprints to this gap.
  */
 export function congaSpacing(count: number): number {
   if (count <= 1) return CONGA_MAX_SPACING;
@@ -78,6 +78,16 @@ export function congaSpacing(count: number): number {
   if (fitted > CONGA_MAX_SPACING) return CONGA_MAX_SPACING;
   if (fitted < CONGA_MIN_SPACING) return CONGA_MIN_SPACING;
   return fitted;
+}
+
+/**
+ * Uniform render scale that fits a circular footprint inside the live gap.
+ * Variants keep their relative silhouettes, while broad cones cannot merge into
+ * their neighbours when a long line compresses to CONGA_MIN_SPACING.
+ */
+export function congaFootprintScale(count: number, diameter: number): number {
+  if (!Number.isFinite(diameter) || diameter <= 0) return 1;
+  return Math.min(1, congaSpacing(count) / diameter);
 }
 
 export class CongaLine {
@@ -191,9 +201,15 @@ export class CongaLine {
     return first.x;
   }
 
-  /** Drop breadcrumbs older than the longest tail we could ever sample. */
+  /**
+   * Drop breadcrumbs older than the live tail can sample. The spacing floor means
+   * a large convoy can legitimately grow beyond CONGA_TAIL_LENGTH, so pruning to
+   * that fixed budget makes rear members clamp to one stale breadcrumb. Retain
+   * the actual tail plus two gaps for interpolation and newly joined members.
+   */
   private prune(): void {
-    const horizon = this.travelled - (CONGA_TAIL_LENGTH + CONGA_MAX_SPACING * 2);
+    const retainedTail = Math.max(CONGA_TAIL_LENGTH, this.tailLength);
+    const horizon = this.travelled - (retainedTail + CONGA_MAX_SPACING * 2);
     let drop = 0;
     while (drop + 1 < this.trail.length && this.trail[drop + 1].s < horizon) {
       drop++;

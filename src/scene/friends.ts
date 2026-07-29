@@ -34,7 +34,10 @@ import {
 import type { Entity } from '../game/entities/entity.ts';
 import { FRIEND_KIND } from '../game/entities/friends.ts';
 import { laneToX } from '../game/entities/lanes.ts';
-import type { CongaMember } from '../game/friends/conga.ts';
+import {
+  congaFootprintScale,
+  type CongaMember,
+} from '../game/friends/conga.ts';
 import { FRIENDS, friendProfile } from '../game/friends/roster.ts';
 import { ACCENT, ACCENT_2 } from '../theme.ts';
 
@@ -53,6 +56,10 @@ const HOP_RATE = 3.2;
  * his hitbox.
  */
 const WEAVE = 0.26;
+/** Widest rendered base in the cast (the decorative plinth is 1.15× radius). */
+const MAX_CONGA_DIAMETER = Math.max(
+  ...FRIENDS.map((profile) => profile.baseRadius * 2 * 1.15),
+);
 
 const white = new MeshStandardMaterial({
   color: 0xffffff,
@@ -277,6 +284,10 @@ export class Friends {
     reducedMotion: boolean,
   ): void {
     this.conga.begin();
+    const footprintScale = congaFootprintScale(
+      members.length,
+      MAX_CONGA_DIAMETER,
+    );
     for (let i = 0; i < members.length; i++) {
       const member = members[i];
       const slot = this.conga.take(member.variant);
@@ -312,7 +323,10 @@ export class Friends {
       const eased = 1 - (1 - pop) ** 3;
       // A touch of overshoot at the top of the pop — the squash that sells it.
       const scale = 0.2 + eased * 0.8 + Math.sin(eased * Math.PI) * 0.14;
-      g.scale.setScalar(reducedMotion ? 1 : scale);
+      // The broadest variant is wider than the compressed gap. Fit the whole
+      // cast uniformly to the live spacing so silhouettes stay distinct while
+      // retaining every character's relative proportions.
+      g.scale.setScalar(footprintScale * (reducedMotion ? 1 : scale));
     }
     this.conga.end();
   }
