@@ -5,24 +5,79 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gary and Friends</title>
     <style>
+      /* ── Design tokens ─────────────────────────────────────────────────
+         Dark-first surfaces, a single owned accent (Gary orange) at the token
+         layer, and a deliberate type scale (2 stacks, real sizes). Every
+         component reads from these — no one-off hexes in the overlay. */
+      :root {
+        --bg: #0e0e18;
+        --bg-2: #14141f;
+        /* Card surface must carry legibility on its own — backdrop-filter is a
+           bonus, never the thing standing between text and the moving road. */
+        --surface: rgba(16, 16, 27, 0.93);
+        --surface-hud: rgba(18, 18, 30, 0.78);
+        --surface-solid: #14141f;
+        --hairline: rgba(255, 255, 255, 0.08);
+        --hairline-strong: rgba(255, 255, 255, 0.16);
+
+        /* The one owned accent, plus its glow + a warmer companion. */
+        --accent: #ff7a1a;
+        --accent-2: #ffb347;
+        --accent-ink: #1a0f04;
+        --accent-glow: rgba(255, 122, 26, 0.45);
+        --danger: #ff4d5e;
+
+        --text: #f5f5fa;
+        --text-dim: #9a9ab2;
+        --text-faint: #62627a;
+
+        /* Paired characterful stacks: a tight geometric display face and a
+           mono face for instrument-style telemetry numerals. */
+        --font-display: "Space Grotesk", "Segoe UI", system-ui, -apple-system,
+          "Helvetica Neue", Arial, sans-serif;
+        --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono",
+          Menlo, Consolas, monospace;
+
+        /* Type scale — a handful of real steps forming hierarchy. */
+        --fs-hero: clamp(2.75rem, 9vw, 5.5rem);
+        --fs-title: clamp(2rem, 5vw, 3rem);
+        --fs-readout: clamp(1.5rem, 3.4vw, 2.1rem);
+        --fs-body: 1rem;
+        --fs-label: 0.72rem;
+
+        --ease: cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
       html,
       body {
         margin: 0;
         height: 100%;
         overflow: hidden;
-        background: #1a1a2e;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-display);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
       #app {
-        width: 100vw;
-        height: 100vh;
+        position: fixed;
+        inset: 0;
       }
       canvas {
         display: block;
+      }
+      /* HUD overlay is injected by src/ui/hud.ts and sits above the canvas. */
+      #hud {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        pointer-events: none;
       }
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="hud"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,0 +1,365 @@
+/**
+ * The DOM overlay: menu, in-play telemetry HUD, game-over card, and the async
+ * loading skeleton shown until the WebGL scene reports its first frame.
+ *
+ * Rendering-side (owns DOM, reads the store, never mutates game state except
+ * through published store actions on explicit user intent). It subscribes to the
+ * GameStore and re-renders on change — the store is the source of truth, this is
+ * a projection of it, exactly like the test API.
+ *
+ * Design system: dark-first surfaces, the single owned --accent, a paired
+ * display/mono type scale, motion only on state change (transform/opacity, with
+ * a prefers-reduced-motion path), and one consistent inline-SVG icon set (no
+ * emoji, no second icon library). The distinctive idea: the whole overlay reads
+ * as a retro highway instrument cluster — mono telemetry numerals, an accent
+ * speed bar, a card that docks over the moving road rather than covering it.
+ */
+import type { GameState, GameStore, GameStatus } from '../game/state.ts';
+import { BASE_SPEED } from '../game/state.ts';
+
+/* ── Icon set (one family: 24×24, stroke 2, round caps) ───────────────────── */
+
+const ns = 'stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+
+const icon = {
+  score: `<svg viewBox="0 0 24 24" ${ns}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.6"/></svg>`,
+  friend: `<svg viewBox="0 0 24 24" ${ns}><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 6"/><path d="M17 14.4A5.5 5.5 0 0 1 20.5 20"/></svg>`,
+  speed: `<svg viewBox="0 0 24 24" ${ns}><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-5"/><circle cx="12" cy="18" r="1"/></svg>`,
+  play: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13l11-6.5z"/></svg>`,
+  crash: `<svg viewBox="0 0 24 24" ${ns}><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>`,
+};
+
+/* ── Component styles (tokens live in index.html :root) ────────────────────── */
+
+const CSS = `
+#hud * { box-sizing: border-box; margin: 0; }
+#hud button { font-family: inherit; }
+
+/* Screen containers cross-fade on state change. */
+#hud .screen {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  opacity: 0; transform: scale(0.985);
+  transition: opacity 0.35s var(--ease), transform 0.35s var(--ease);
+  pointer-events: none;
+}
+#hud[data-screen="loading"] .screen.loading,
+#hud[data-screen="menu"] .screen.menu,
+#hud[data-screen="gameover"] .screen.gameover {
+  opacity: 1; transform: none; pointer-events: auto;
+}
+/* The playbar is not a modal screen — it lives at the top edge while playing. */
+#hud .playbar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; gap: 12px; justify-content: center;
+  padding: 18px 20px;
+  opacity: 0; transform: translateY(-14px);
+  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
+  pointer-events: none;
+}
+#hud[data-screen="playing"] .playbar,
+#hud[data-screen="gameover"] .playbar { opacity: 1; transform: none; }
+
+/* Modal cards sit over a vignette that lets the road show through. */
+#hud .scrim {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 55%, rgba(14,14,24,0.05), rgba(10,10,18,0.72) 78%);
+}
+/* Cards ride above centre so the road keeps running underneath them. */
+#hud .card {
+  position: relative;
+  margin-bottom: 12vh;
+  text-align: center;
+  padding: 40px 44px;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5), inset 0 1px 0 var(--hairline-strong);
+  max-width: min(90vw, 460px);
+}
+
+/* Type: eyebrow / hero / title / tagline. */
+#hud .eyebrow {
+  font-size: var(--fs-label); font-weight: 600;
+  letter-spacing: 0.34em; text-transform: uppercase;
+  color: var(--accent);
+}
+#hud .hero {
+  font-size: var(--fs-hero); font-weight: 700; line-height: 0.94;
+  letter-spacing: -0.02em; margin: 14px 0 0;
+}
+#hud .hero .amp { color: var(--accent); }
+#hud .title {
+  font-size: var(--fs-title); font-weight: 700; letter-spacing: -0.02em;
+  line-height: 1.05; margin-top: 8px;
+}
+#hud .tagline {
+  font-size: var(--fs-body); color: var(--text-dim);
+  margin-top: 12px; line-height: 1.5;
+}
+
+/* Primary button. */
+#hud .btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin-top: 26px; padding: 14px 26px;
+  font-size: 0.95rem; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border: none; border-radius: 12px; cursor: pointer;
+  box-shadow: 0 10px 24px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.35);
+  transition: transform 0.12s var(--ease), box-shadow 0.2s var(--ease), filter 0.2s var(--ease);
+}
+#hud .btn svg { width: 18px; height: 18px; }
+#hud .btn:hover { transform: translateY(-2px); box-shadow: 0 16px 34px var(--accent-glow); filter: brightness(1.06); }
+#hud .btn:active { transform: translateY(0) scale(0.97); }
+#hud .btn:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 3px; }
+
+/* Controls legend. */
+#hud .legend {
+  display: flex; gap: 18px; justify-content: center;
+  margin-top: 22px; color: var(--text-faint);
+  font-size: var(--fs-label); letter-spacing: 0.1em; text-transform: uppercase;
+}
+#hud .legend b { color: var(--text-dim); font-weight: 700; }
+
+/* Telemetry readouts (instrument-dense). */
+#hud .readout {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; min-width: 116px;
+  background: var(--surface-hud); border: 1px solid var(--hairline);
+  border-radius: 12px; backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 var(--hairline-strong);
+}
+#hud .readout .ic {
+  display: grid; place-items: center;
+  width: 26px; height: 26px; color: var(--accent);
+}
+#hud .readout .ic svg { width: 20px; height: 20px; }
+#hud .readout .meta { display: flex; flex-direction: column; line-height: 1; text-align: left; }
+#hud .readout .lbl {
+  font-size: 0.62rem; font-weight: 600; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .readout .val {
+  font-family: var(--font-mono); font-size: var(--fs-readout);
+  font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+  color: var(--text); margin-top: 3px;
+  transition: color 0.15s var(--ease);
+}
+#hud .readout.bump .val { animation: hud-bump 0.34s var(--ease); }
+@keyframes hud-bump {
+  0% { color: var(--accent); transform: scale(1); }
+  35% { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+
+/* Speed readout gets a little accent bar showing throttle. */
+#hud .speed { flex-direction: column; align-items: stretch; min-width: 148px; gap: 6px; }
+#hud .speed .row { display: flex; align-items: center; gap: 10px; }
+#hud .bar { height: 4px; border-radius: 999px; background: var(--hairline); overflow: hidden; }
+#hud .bar > i {
+  display: block; height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transition: width 0.25s var(--ease);
+}
+
+/* Game-over stats. */
+#hud .stats { display: flex; gap: 28px; justify-content: center; margin-top: 20px; }
+#hud .stat .n {
+  font-family: var(--font-mono); font-size: 2rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--accent);
+}
+#hud .stat .k {
+  font-size: var(--fs-label); letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--text-faint); margin-top: 4px;
+}
+#hud .crash { color: var(--danger); display: inline-grid; place-items: center; }
+#hud .crash svg { width: 40px; height: 40px; }
+
+/* ── Loading skeleton — shapes matching the final layout, with a shimmer. ─── */
+#hud .sk {
+  position: relative; overflow: hidden;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--hairline); border-radius: 12px;
+}
+#hud .sk::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.09), transparent);
+  transform: translateX(-100%); animation: hud-shimmer 1.15s infinite;
+}
+@keyframes hud-shimmer { 100% { transform: translateX(100%); } }
+#hud .skeleton .sk-bar { position: absolute; top: 18px; left: 0; right: 0; display: flex; gap: 12px; justify-content: center; }
+#hud .skeleton .sk-pill { width: 116px; height: 62px; }
+#hud .skeleton .sk-pill.wide { width: 148px; }
+/* Matches the real card's footprint AND its offset, so nothing jumps on load. */
+#hud .skeleton .sk-card {
+  width: min(90vw, 460px); height: 300px; border-radius: 20px;
+  margin-bottom: 12vh;
+}
+
+/* Reduced-motion: kill transforms/shimmer, keep opacity legible. */
+@media (prefers-reduced-motion: reduce) {
+  #hud .screen, #hud .playbar { transition: opacity 0.2s linear; transform: none !important; }
+  #hud .btn, #hud .readout .val, #hud .bar > i { transition: none; }
+  #hud .readout.bump .val { animation: none; }
+  #hud .sk::after { animation: none; }
+}
+`;
+
+const STATUS_TO_SCREEN: Record<GameStatus, string> = {
+  menu: 'menu',
+  playing: 'playing',
+  gameover: 'gameover',
+};
+
+export class Hud {
+  private readonly root: HTMLElement;
+  private ready = false;
+
+  // Cached dynamic nodes.
+  private readonly scoreVal: HTMLElement;
+  private readonly friendsVal: HTMLElement;
+  private readonly speedVal: HTMLElement;
+  private readonly speedFill: HTMLElement;
+  private readonly scoreRO: HTMLElement;
+  private readonly friendsRO: HTMLElement;
+  private readonly finalScore: HTMLElement;
+  private readonly finalFriends: HTMLElement;
+
+  private prev: GameState;
+
+  constructor(private readonly store: GameStore) {
+    const style = document.createElement('style');
+    style.textContent = CSS;
+    document.head.appendChild(style);
+
+    const root = document.getElementById('hud');
+    if (!root) throw new Error('#hud container not found');
+    this.root = root;
+    this.root.innerHTML = this.template();
+
+    this.scoreVal = this.q('#ro-score .val');
+    this.friendsVal = this.q('#ro-friends .val');
+    this.speedVal = this.q('#ro-speed .val');
+    this.speedFill = this.q('#ro-speed .bar > i');
+    this.scoreRO = this.q('#ro-score');
+    this.friendsRO = this.q('#ro-friends');
+    this.finalScore = this.q('#final-score');
+    this.finalFriends = this.q('#final-friends');
+
+    this.q<HTMLButtonElement>('#startBtn').addEventListener('click', () =>
+      this.store.start(),
+    );
+    this.q<HTMLButtonElement>('#restartBtn').addEventListener('click', () =>
+      this.store.start(),
+    );
+
+    this.prev = this.store.getState();
+    this.store.subscribe((s) => this.render(s));
+    this.render(this.prev);
+  }
+
+  /** Called by the renderer once the first WebGL frame has landed. */
+  setReady(): void {
+    if (this.ready) return;
+    this.ready = true;
+    this.render(this.store.getState());
+  }
+
+  private render(s: GameState): void {
+    this.root.dataset.screen = this.ready ? STATUS_TO_SCREEN[s.status] : 'loading';
+
+    this.scoreVal.textContent = String(s.score);
+    this.friendsVal.textContent = String(s.friends);
+    this.speedVal.textContent = String(Math.round(s.speed * 4)); // stylised km/h
+    const throttle = Math.max(0, Math.min(1, s.speed / (BASE_SPEED * 1.5)));
+    this.speedFill.style.width = `${(throttle * 100).toFixed(0)}%`;
+
+    if (s.score !== this.prev.score) this.flash(this.scoreRO);
+    if (s.friends !== this.prev.friends) this.flash(this.friendsRO);
+
+    this.finalScore.textContent = String(s.score);
+    this.finalFriends.textContent = String(s.friends);
+
+    this.prev = s;
+  }
+
+  private flash(el: HTMLElement): void {
+    el.classList.remove('bump');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('bump');
+  }
+
+  private q<T extends HTMLElement = HTMLElement>(sel: string): T {
+    const el = this.root.querySelector<T>(sel);
+    if (!el) throw new Error(`HUD element not found: ${sel}`);
+    return el;
+  }
+
+  private template(): string {
+    return `
+      <div class="screen loading">
+        <div class="skeleton" style="position:absolute;inset:0;">
+          <div class="sk-bar">
+            <div class="sk sk-pill"></div>
+            <div class="sk sk-pill"></div>
+            <div class="sk sk-pill wide"></div>
+          </div>
+          <div style="position:absolute;inset:0;display:grid;place-items:center;">
+            <div class="sk sk-card"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen menu">
+        <div class="scrim"></div>
+        <div class="card">
+          <p class="eyebrow">Endless Highway</p>
+          <h1 class="hero">GARY<span class="amp"> &amp; </span>FRIENDS</h1>
+          <p class="tagline">A road cone with places to be. Weave the three lanes,
+            keep it clean, and pick up a friend or two.</p>
+          <button class="btn" id="startBtn">${icon.play}<span>Start run</span></button>
+          <div class="legend">
+            <span><b>&larr; &rarr;</b> Switch lane</span>
+            <span><b>Space</b> Start</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="playbar">
+        <div class="readout" id="ro-score">
+          <span class="ic">${icon.score}</span>
+          <span class="meta"><span class="lbl">Score</span><span class="val">0</span></span>
+        </div>
+        <div class="readout" id="ro-friends">
+          <span class="ic">${icon.friend}</span>
+          <span class="meta"><span class="lbl">Friends</span><span class="val">0</span></span>
+        </div>
+        <div class="readout speed" id="ro-speed">
+          <div class="row">
+            <span class="ic">${icon.speed}</span>
+            <span class="meta"><span class="lbl">Speed</span><span class="val">0</span></span>
+          </div>
+          <div class="bar"><i></i></div>
+        </div>
+      </div>
+
+      <div class="screen gameover">
+        <div class="scrim"></div>
+        <div class="card">
+          <span class="crash">${icon.crash}</span>
+          <p class="eyebrow" style="margin-top:12px;">Run ended</p>
+          <h2 class="title">Wrecked!</h2>
+          <div class="stats">
+            <div class="stat"><div class="n" id="final-score">0</div><div class="k">Score</div></div>
+            <div class="stat"><div class="n" id="final-friends">0</div><div class="k">Friends</div></div>
+          </div>
+          <button class="btn" id="restartBtn">${icon.play}<span>Run it back</span></button>
+          <div class="legend"><span><b>Space</b> Restart</span></div>
+        </div>
+      </div>
+    `;
+  }
+}

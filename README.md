@@ -1,8 +1,10 @@
 # Gary and Friends
 
-A three.js browser game scaffold — **foundation and test harness only**. Right now
-it renders "Gary", a slowly rotating orange road cone, on a ground plane with
-basic lighting. The real game gets built on top of this by the factory.
+A three.js browser game — **shared foundation + test harness**. It renders the
+game core: a scrolling 3-lane night highway, "Gary" the googly-eyed road cone
+lerping between lanes, a chase camera, and the menu → playing → gameover →
+restart state machine with a telemetry HUD. Gameplay (traffic, friends, scoring
+rules) gets built on top of this by the factory.
 
 The point of this repo is a **green-gated, browser-testable canvas-game
 architecture**: game logic is kept separable from rendering, and a runtime test
@@ -42,8 +44,14 @@ load-bearing.**
 interface GaryTestApi {
   readonly state: 'menu' | 'playing' | 'gameover'; // mirrors GameState.status
   readonly score: number;                           // mirrors GameState.score
+  readonly friends: number;                         // mirrors GameState.friends
+  readonly lane: number;                            // 0..2, mirrors GameState.lane
+  readonly speed: number;                           // mirrors GameState.speed
   readonly ready: boolean;                          // true after 1st WebGL frame
   start(): void;                                     // menu|gameover -> playing
+  __setLane(n: number): void;                        // move Gary to lane n
+  __forceCollision(): void;                          // force -> gameover
+  __spawnFriend(): void;                             // spawn a friend (stub: 02)
 }
 
 declare global {
@@ -53,8 +61,14 @@ declare global {
 }
 ```
 
-Scaffold values: `state: 'menu'`, `score: 0`, `ready: true` once a frame has
-rendered.
+Menu values: `state: 'menu'`, `score: 0`, `friends: 0`, `lane: 1` (centre),
+`speed: 0`, `ready: true` once a frame has rendered.
+
+**Deterministic test hooks** (`__`-prefixed) force specific situations so e2e
+never depends on random spawns. Their names/signatures are **pinned by the
+foundation** — later tickets fill in behaviour without renaming. `__setLane` and
+`__forceCollision` are wired now; `__spawnFriend` is a declared no-op stub until
+friend-spawning lands (ticket 02).
 
 **Extending it (factory guidance):**
 
@@ -68,13 +82,18 @@ rendered.
 ## Where the logic / rendering seam lives
 
 - **Game logic (pure, unit-tested, no three.js):** `src/game/state.ts` — the
-  `GameStore` (status, score, transitions, subscriptions). Test:
-  `src/game/state.test.ts`.
+  `GameStore`. Source of truth for `status`, `score`, `lane` (0..2, centre = 1),
+  `speed` and `friends`, plus the transitions/subscriptions. Actions: `start`
+  (also the restart path), `addScore`, `addFriends`, `setLane` (clamped),
+  `setSpeed`, `gameOver`, `reset`. Test: `src/game/state.test.ts`.
 - **Test API (the bridge):** `src/testApi.ts` — projects `GameStore` onto
-  `window.__GARY__`.
-- **Rendering (three.js, browser-only):** `src/main.ts` (scene, camera, lights,
-  animation loop) and `src/scene/gary.ts` (procedural cone geometry). This side
-  *reads* the store and never owns game state.
+  `window.__GARY__` (getters) and exposes the deterministic `__`-hooks.
+- **Rendering (three.js, browser-only):** `src/main.ts` (scene, fog, chase
+  camera, animation loop), `src/scene/gary.ts` (procedural googly-eyed cone) and
+  `src/scene/road.ts` (`Road`: 3-lane highway with recycled dash/barrier/light
+  props scrolled by `speed`). This side *reads* the store and never owns state.
+- **DOM overlay:** `src/ui/hud.ts` — menu / telemetry HUD / game-over card and
+  the async loading skeleton, a projection of the store like the test API.
 - **Browser e2e:** `e2e/smoke.spec.ts`.
 
 Keeping state out of the renderer is what makes the game testable both fast
