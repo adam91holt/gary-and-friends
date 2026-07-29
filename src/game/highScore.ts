@@ -28,7 +28,9 @@ export interface StoragePort {
 export function parseHighScore(raw: string | null): number {
   if (raw === null) return 0;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (!Number.isFinite(value) || value <= 0 || value > Number.MAX_SAFE_INTEGER) {
+    return 0;
+  }
   return Math.floor(value);
 }
 

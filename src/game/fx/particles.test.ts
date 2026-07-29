@@ -102,6 +102,28 @@ describe('Particles', () => {
     system.clear();
     expect(system.aliveCount).toBe(0);
     expect(Array.from(system.colors).every((c) => c === 0)).toBe(true);
+    expect(Array.from(system.positions).every((p) => p > 100_000)).toBe(true);
+  });
+
+  it('honours a signed spray direction', () => {
+    const right = new Particles({ ...CONFIG, gravity: 0, drag: 0 });
+    const left = new Particles({ ...CONFIG, gravity: 0, drag: 0 });
+    const directional = {
+      ...BURST,
+      count: 6,
+      spread: 0,
+      direction: 1,
+      life: 1,
+    };
+    right.emit(directional, createRng(9));
+    left.emit({ ...directional, direction: -1 }, createRng(9));
+    right.update(0.1);
+    left.update(0.1);
+
+    for (let i = 0; i < 6; i++) {
+      expect(right.positions[i * 3]).toBeGreaterThan(0);
+      expect(left.positions[i * 3]).toBeLessThan(0);
+    }
   });
 
   it('is deterministic for a given seed', () => {

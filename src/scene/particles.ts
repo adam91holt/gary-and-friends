@@ -11,9 +11,10 @@
  * road dust of slots. Separate pools also mean separate draw calls with the
  * right blend and size per family — still only three, which is nothing.
  *
- * Dust is ALPHA-blended off-white: additive dust over a dark road glows like
- * embers, which is wrong for grit thrown off tarmac. Sparks and debris are
- * additive, because they are light.
+ * All pools are additive because the pure simulation fades vertex colour to
+ * black. Under additive blending black is transparent; inactive slots are also
+ * parked outside the scene. Dust stays soft and understated through its muted
+ * tint and lower material opacity rather than alpha blending black sprites.
  */
 import {
   AdditiveBlending,
@@ -23,7 +24,6 @@ import {
   Color,
   DynamicDrawUsage,
   Group,
-  NormalBlending,
   Points,
   PointsMaterial,
   type Texture,
@@ -74,7 +74,6 @@ function createSpriteTexture(): Texture {
 interface PoolOptions {
   readonly size: number;
   readonly opacity: number;
-  readonly additive: boolean;
 }
 
 class Pool {
@@ -102,7 +101,7 @@ class Pool {
       transparent: true,
       opacity: options.opacity,
       depthWrite: false,
-      blending: options.additive ? AdditiveBlending : NormalBlending,
+      blending: AdditiveBlending,
       sizeAttenuation: true,
     });
     this.points = new Points(this.geometry, material);
@@ -122,6 +121,7 @@ class Pool {
  * so the plume trails from his base rather than engulfing him.
  */
 const DUST_Z = 0.45;
+const PARTICLE_SEED = 0x9e37;
 
 export class ParticleFx {
   readonly group = new Group();
@@ -133,7 +133,7 @@ export class ParticleFx {
    * Seeded, not `Math.random()`: the same rule the spawn logic follows, so a
    * screenshot taken after a scripted sequence looks the same every run.
    */
-  private readonly rng: Rng = createRng(0x9e37);
+  private rng: Rng = createRng(PARTICLE_SEED);
   /** Time until the next continuous road-dust puff. */
   private dustTimer = 0;
   /**
@@ -156,19 +156,19 @@ export class ParticleFx {
     this.dust = new Pool(
       new Particles({ capacity: 340, gravity: -3.4, drag: 1.6, fade: 1.4 }),
       sprite,
-      { size: 0.19, opacity: 0.66, additive: false },
+      { size: 0.19, opacity: 0.5 },
     );
     // Pickup sparks: light, floaty, tinted to the friend who just joined.
     this.sparks = new Pool(
       new Particles({ capacity: 340, gravity: -2.6, drag: 1.3, fade: 2.1 }),
       sprite,
-      { size: 0.15, opacity: 0.95, additive: true },
+      { size: 0.15, opacity: 0.95 },
     );
     // Crash debris: fast, ballistic, and it hangs around to sit under the card.
     this.debris = new Pool(
       new Particles({ capacity: 220, gravity: -11, drag: 0.55, fade: 1.2 }),
       sprite,
-      { size: 0.17, opacity: 1, additive: true },
+      { size: 0.17, opacity: 1 },
     );
 
     this.group.add(this.dust.points, this.sparks.points, this.debris.points);
@@ -183,13 +183,18 @@ export class ParticleFx {
     );
   }
 
+  /** Keep event bursts in the same moving frame as the scrolling road. */
+  setRoadSpeed(speed: number): void {
+    this.roadSpeed = Math.max(0, speed);
+  }
+
   /**
    * Continuous road dust under Gary while a run is under way. Emitted on a
    * distance-based cadence rather than a time-based one, so the plume thickens
    * with speed instead of thinning out as the road accelerates past it.
    */
   road(dt: number, x: number, speed: number): void {
-    this.roadSpeed = speed;
+    this.setRoadSpeed(speed);
     if (speed <= 0) return;
     this.dustTimer -= dt * speed;
     if (this.dustTimer > 0) return;
@@ -239,6 +244,7 @@ export class ParticleFx {
         colorJitter: 0.4,
         drift: this.roadSpeed * 0.8,
         spread: 0.28,
+        direction: -Math.sign(direction),
       },
       this.rng,
     );
@@ -307,6 +313,7 @@ export class ParticleFx {
         colorJitter: 0.35,
         drift: this.roadSpeed * 0.9,
         spread: 0.3,
+        direction: Math.sign(direction),
       },
       this.rng,
     );
@@ -331,6 +338,7 @@ export class ParticleFx {
         lifeJitter: 0.7,
         color: DEBRIS_COLOR,
         colorJitter: 0.4,
+        drift: this.roadSpeed * 0.9,
         spread: 0.35,
       },
       this.rng,
@@ -348,6 +356,7 @@ export class ParticleFx {
         lifeJitter: 0.5,
         color: WHITE,
         colorJitter: 0.2,
+        drift: this.roadSpeed * 0.9,
         spread: 0.3,
       },
       this.rng,
@@ -365,6 +374,7 @@ export class ParticleFx {
         lifeJitter: 0.5,
         color: DUST_COLOR,
         colorJitter: 0.4,
+        drift: this.roadSpeed * 0.95,
         spread: 0.3,
       },
       this.rng,
@@ -383,6 +393,8 @@ export class ParticleFx {
     this.sparks.system.clear();
     this.debris.system.clear();
     this.dustTimer = 0;
+    this.roadSpeed = 0;
+    this.rng = createRng(PARTICLE_SEED);
     this.update(0);
   }
 }

@@ -49,6 +49,7 @@ describe('parseHighScore', () => {
     expect(parseHighScore('not a score')).toBe(0);
     expect(parseHighScore('-17')).toBe(0);
     expect(parseHighScore('Infinity')).toBe(0);
+    expect(parseHighScore('999999999999999999999')).toBe(0);
   });
 });
 

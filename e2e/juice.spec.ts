@@ -45,9 +45,10 @@ test('menu shows the title and the persisted best', async ({ page }) => {
   await expect(page.locator('#hud')).toHaveAttribute('data-screen', 'menu');
   await expect(page.locator('#hud .screen.menu')).toHaveCSS('opacity', '1');
 
-  // The title screen names the game.
-  await expect(page.locator('#hud .screen.menu .hero')).toContainText('GARY');
-  await expect(page.locator('#hud .screen.menu .hero')).toContainText('FRIENDS');
+  // The title screen uses the ticket's full game name.
+  await expect(page.locator('#hud .screen.menu .hero')).toHaveText(
+    'GARY AND HIS FRIENDS',
+  );
 
   // The seeded best is on the card and on the test API.
   await expect(page.locator('#menu-best-n')).toHaveText('4242');

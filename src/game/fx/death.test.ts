@@ -84,7 +84,10 @@ describe('deathPose', () => {
   it('settles to a stable, finished pose and stays there', () => {
     const settled = deathPose(DEATH_DURATION);
     expect(settled.done).toBe(true);
-    expect(settled.scaleY).toBeCloseTo(1, 6);
+    // The game-over composition retains the punchline instead of restoring an
+    // ordinary full-height cone after the animation finishes.
+    expect(settled.scaleY).toBeLessThan(0.65);
+    expect(settled.scaleX).toBeGreaterThan(1.2);
     expect(deathPose(DEATH_DURATION + 10)).toEqual(settled);
   });
 

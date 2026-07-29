@@ -9,10 +9,10 @@
  * pure it is unit-tested at any timestep — the same deal the entity field made.
  *
  * ── Fade model ──────────────────────────────────────────────────────────────
- * Particles fade by darkening their per-vertex colour toward black rather than
- * by animating opacity. Under additive blending on a dark road that IS a fade,
- * and it means the whole visual state of the system lives in two attribute
- * arrays that upload in one go, with no per-particle material.
+ * Particles fade by darkening their per-vertex colour toward black. The render
+ * pools use additive blending, where black contributes nothing. Retired slots
+ * are also parked outside the scene, so inactive points are invisible even if a
+ * material is changed later.
  */
 import type { Rng } from '../entities/rng.ts';
 
@@ -55,14 +55,22 @@ export interface EmitOptions {
   readonly drift?: number;
   /** Spawn scatter radius around the origin. */
   readonly spread?: number;
+  /**
+   * Optional signed X spray direction. Positive sprays right, negative left;
+   * omitted/zero keeps the full radial burst used by pops and crashes.
+   */
+  readonly direction?: number;
 }
+
+/** Park inactive points well outside every camera/frustum. */
+const DEAD_POSITION = 1_000_000;
 
 /**
  * A pooled particle system. Positions and colours are exposed directly so the
  * renderer can hand them to a `BufferAttribute` once and never copy again.
  */
 export class Particles {
-  /** xyz per particle. Dead particles keep their last position (colour is 0). */
+  /** xyz per particle. Dead particles are parked outside the scene. */
   readonly positions: Float32Array;
   /** rgb per particle, already faded. Dead particles are exactly black. */
   readonly colors: Float32Array;
@@ -80,6 +88,7 @@ export class Particles {
     this.config = config;
     const n = config.capacity;
     this.positions = new Float32Array(n * 3);
+    this.positions.fill(DEAD_POSITION);
     this.colors = new Float32Array(n * 3);
     this.velocities = new Float32Array(n * 3);
     this.baseColors = new Float32Array(n * 3);
@@ -117,6 +126,7 @@ export class Particles {
       colorJitter = 0,
       drift = 0,
       spread = 0,
+      direction = 0,
     } = options;
 
     let spawned = 0;
@@ -124,8 +134,11 @@ export class Particles {
       const slot = this.freeSlot();
       if (slot === -1) break;
 
-      // Cheap uniform-ish direction on the XZ plane, biased upward by `lift`.
-      const angle = rng() * Math.PI * 2;
+      // Radial by default. Directional sprays use a broad forward arc so they
+      // still look turbulent while every grain moves toward the intended side.
+      const angle = direction
+        ? (direction > 0 ? 0 : Math.PI) + (rng() - 0.5) * Math.PI * 0.8
+        : rng() * Math.PI * 2;
       const magnitude = speed + rng() * speedJitter;
       const p = slot * 3;
       this.positions[p] = x + (rng() - 0.5) * 2 * spread;
@@ -201,6 +214,9 @@ export class Particles {
     this.colors[p] = 0;
     this.colors[p + 1] = 0;
     this.colors[p + 2] = 0;
+    this.positions[p] = DEAD_POSITION;
+    this.positions[p + 1] = DEAD_POSITION;
+    this.positions[p + 2] = DEAD_POSITION;
     if (this.alive > 0) this.alive--;
   }
 

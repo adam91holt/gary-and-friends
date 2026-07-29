@@ -1025,7 +1025,7 @@ export class Hud {
         <div class="scrim"></div>
         <div class="card">
           <p class="eyebrow">Endless Highway</p>
-          <h1 class="hero">GARY<span class="amp"> &amp; </span>FRIENDS</h1>
+          <h1 class="hero">GARY <span class="amp">AND HIS</span> FRIENDS</h1>
           <p class="tagline">A road cone with places to be. Weave the three lanes,
             keep it clean, and pick up a friend or two.</p>
           <div class="best empty" id="menu-best">

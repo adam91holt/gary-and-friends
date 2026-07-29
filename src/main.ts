@@ -100,22 +100,22 @@ let deathX = 0;
 // The gameplay simulation (traffic, friends, scoring, difficulty, collision).
 // Pure logic — this file only ticks it and draws whatever it says.
 const run = new Run(store, {
-  onNearMiss: () => {
+  onNearMiss: (vehicleX) => {
     nearMissFlash = 1;
     trauma = addTrauma(trauma, NEAR_MISS_TRAUMA);
     audio.nearMiss();
     hud.pulse();
-    // Spray sparks off the side the traffic went past, so the flick of light
-    // points at the thing that nearly killed you.
-    const side = gary.root.position.x >= 0 ? -1 : 1;
-    fx.nearMiss(gary.root.position.x, side);
+    // Spray sparks off the side the traffic actually passed, rather than
+    // guessing from Gary's lane (which points the wrong way in the centre lane).
+    const side = Math.sign(vehicleX - gary.root.position.x) || 1;
+    if (!reducedMotion) fx.nearMiss(gary.root.position.x, side);
   },
   onFriend: (pickup) => {
     friendFlash = 1;
     trauma = addTrauma(trauma, PICKUP_TRAUMA);
     audio.friend();
     hud.collected(pickup);
-    fx.pop(gary.root.position.x, pickup.variant);
+    if (!reducedMotion) fx.pop(gary.root.position.x, pickup.variant);
   },
 });
 
@@ -344,13 +344,13 @@ store.subscribe((state) => {
       deathX = gary.root.position.x;
       audio.crash();
       trauma = addTrauma(trauma, CRASH_TRAUMA);
-      fx.crash(gary.root.position.x);
+      if (!reducedMotion) fx.crash(gary.root.position.x);
 
       // Bank the run. `submitHighScore` writes only on a genuine improvement.
       const result = submitHighScore(storage, state.score, highScore);
       highScore = result.best;
       hud.setHighScore(highScore, result.isNew);
-      if (result.isNew) audio.highScore();
+      if (result.isNew && !recordAnnounced) audio.highScore();
     }
   }
   if (state.status === 'playing' && state.lane !== previousState.lane) {
@@ -470,6 +470,9 @@ function frame(now: number): void {
         dt,
       );
   road.update(dt, visualSpeed);
+  // Event bursts need the road frame even when recurring dust is disabled (for
+  // example by reduced-motion preferences).
+  fx.setRoadSpeed(visualSpeed);
 
   // Road dust under Gary while the road is moving. Emitted on a distance
   // cadence inside `fx`, so the plume thickens with speed instead of thinning.

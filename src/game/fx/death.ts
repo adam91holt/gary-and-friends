@@ -12,7 +12,7 @@
  *   0.09–0.30  STRETCH  overshoots tall and thin, launched upward — the
  *                       cartoon rebound that sells the hit as comic, not grim.
  *   0.30–0.75  TUMBLE   gravity wins; he arcs back down, still spinning.
- *   0.75–1.05  SETTLE   two decaying wobbles around rest and done.
+ *   0.75–1.05  SETTLE   two decaying wobbles into a flattened wreck pose.
  *
  * Squash and stretch conserve volume (x·y·z ≈ 1) so he never looks like he
  * simply changed size — the classic animation rule, and the reason a squashed
@@ -29,6 +29,8 @@ const STRETCH_END = 0.3;
 const TUMBLE_END = 0.75;
 /** Flattest vertical scale at full squash. */
 const SQUASH_Y = 0.42;
+/** Stable flattened scale retained on the game-over screen. */
+const WRECK_Y = 0.58;
 /** Tallest vertical scale at full stretch. */
 const STRETCH_Y = 1.42;
 /** Peak height of the comedy hop (world units). */
@@ -79,10 +81,11 @@ export interface DeathPose {
   readonly done: boolean;
 }
 
+const WRECK_LATERAL = 1 / Math.sqrt(WRECK_Y);
 const REST: DeathPose = {
-  scaleX: 1,
-  scaleY: 1,
-  scaleZ: 1,
+  scaleX: WRECK_LATERAL,
+  scaleY: WRECK_Y,
+  scaleZ: WRECK_LATERAL,
   y: 0,
   z: KNOCKBACK,
   x: KNOCK_SIDE,
@@ -147,10 +150,11 @@ export function deathPose(t: number): DeathPose {
     scaleY = STRETCH_Y + (0.72 - STRETCH_Y) * inOut(k);
     y = HOP_HEIGHT * (1 - k * k);
   } else {
-    // Settle: two decaying wobbles around rest.
+    // Settle: wobble from the landing squash into the stable flattened wreck.
     const k = span(t, TUMBLE_END, DEATH_DURATION);
-    const wobble = Math.cos(k * Math.PI * 3.4) * (1 - k) ** 2;
-    scaleY = 1 - 0.28 * wobble;
+    const base = 0.72 + (WRECK_Y - 0.72) * outCubic(k);
+    const wobble = Math.sin(k * Math.PI * 4) * 0.12 * (1 - k) ** 2;
+    scaleY = base + wobble;
     y = 0;
   }
 
