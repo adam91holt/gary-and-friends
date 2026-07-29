@@ -113,15 +113,17 @@ export class GameStore {
     this.setState({ ...this.state, friends: this.state.friends + count });
   }
 
-  /** Move Gary to a lane. Request is clamped to 0..LANE_COUNT-1. */
+  /** Move Gary while playing. Request is clamped to 0..LANE_COUNT-1. */
   setLane(lane: number): void {
+    if (this.state.status !== 'playing') return;
     const next = clampLane(lane);
     if (next === this.state.lane) return;
     this.setState({ ...this.state, lane: next });
   }
 
-  /** Set the forward travel speed (never negative). */
+  /** Set the forward travel speed while playing (never negative). */
   setSpeed(speed: number): void {
+    if (this.state.status !== 'playing') return;
     const next = speed < 0 ? 0 : speed;
     if (next === this.state.speed) return;
     this.setState({ ...this.state, speed: next });

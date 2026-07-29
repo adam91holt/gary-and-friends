@@ -27,15 +27,13 @@ import {
   Scene,
   WebGLRenderer,
 } from 'three';
-import { BASE_SPEED, GameStore } from './game/state.ts';
+import { GameStore } from './game/state.ts';
 import { createGary } from './scene/gary.ts';
 import { laneToX, Road } from './scene/road.ts';
 import { Hud } from './ui/hud.ts';
 import { installTestApi, type GaryTestHooks } from './testApi.ts';
 
 const BG = 0x0e0e18;
-/** Gentle road drift on the menu/gameover screens so the scene feels alive. */
-const IDLE_SPEED = 6;
 
 const store = new GameStore();
 
@@ -187,7 +185,6 @@ window.addEventListener('keydown', (e) => {
 // ── Render loop ─────────────────────────────────────────────────────────────
 let lastTime = performance.now();
 let time = 0;
-let scoreCarry = 0;
 
 function frame(now: number): void {
   const dt = Math.min((now - lastTime) / 1000, 0.05);
@@ -195,22 +192,9 @@ function frame(now: number): void {
   time += dt;
 
   const s = store.getState();
-  // The menu gets its own framing (hero shot) and a gentle idle road drift.
   const menuFraming = s.status === 'menu';
-  const effectiveSpeed = menuFraming ? IDLE_SPEED : s.speed;
 
-  // Award distance-based score while playing (renderer signals intent; the
-  // store owns the number). Simple integer trickle; ticket 02 refines scoring.
-  if (s.status === 'playing') {
-    scoreCarry += (s.speed / BASE_SPEED) * dt * 10;
-    if (scoreCarry >= 1) {
-      const whole = Math.floor(scoreCarry);
-      store.addScore(whole);
-      scoreCarry -= whole;
-    }
-  }
-
-  road.update(dt, effectiveSpeed);
+  road.update(dt, s.speed);
 
   // Gary eases toward his lane's X, banking into the move for some juice.
   const targetX = laneToX(s.lane);
@@ -222,8 +206,8 @@ function frame(now: number): void {
     9,
     dt,
   );
-  // Idle bob so he feels alive even on the menu (stilled for reduced motion).
-  gary.position.y = reducedMotion ? 0 : Math.sin(time * 2.4) * 0.04;
+  // Idle bob stays at or above the road surface (stilled for reduced motion).
+  gary.position.y = reducedMotion ? 0 : 0.04 + Math.sin(time * 2.4) * 0.04;
   // On the menu he turns to face the hero camera; in play he squares up to the
   // road ahead. Same damped-transition idea as the camera rigs.
   gary.rotation.y = MathUtils.damp(

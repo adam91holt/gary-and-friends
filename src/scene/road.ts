@@ -6,6 +6,7 @@ import {
   MeshStandardMaterial,
   type Object3D,
 } from 'three';
+import { CENTER_LANE, LANE_COUNT } from '../game/state.ts';
 
 /**
  * The scrolling highway environment: a 3-lane road, recycled dashed lane
@@ -23,9 +24,13 @@ export const LANE_WIDTH = 2.4;
 /** Half-width of the drivable road surface: outer lane centre + half a lane. */
 const ROAD_HALF = LANE_WIDTH * 1.5;
 
-/** Map a lane index (0..2) to its world-space X. Centre lane (1) is x=0. */
+/** Map a lane index to world-space X using the shared lane contract. */
 export function laneToX(lane: number): number {
-  return (lane - 1) * LANE_WIDTH;
+  const rounded = Math.round(lane);
+  const clamped = Number.isNaN(rounded)
+    ? 0
+    : Math.max(0, Math.min(LANE_COUNT - 1, rounded));
+  return (clamped - CENTER_LANE) * LANE_WIDTH;
 }
 
 /** Props wrap once they scroll past this Z (just behind the chase camera). */

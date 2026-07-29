@@ -40,12 +40,27 @@ describe('GameStore', () => {
     expect(store.getState().speed).toBe(0);
   });
 
-  it('ignores score/friend/lane-driving actions outside of play', () => {
+  it('ignores score/friend/lane/speed actions outside of play', () => {
     const store = new GameStore();
     store.addScore(10);
     store.addFriends(4);
-    expect(store.getState().score).toBe(0);
-    expect(store.getState().friends).toBe(0);
+    store.setLane(2);
+    store.setSpeed(40);
+    expect(store.getState()).toEqual({
+      status: 'menu',
+      score: 0,
+      lane: CENTER_LANE,
+      speed: 0,
+      friends: 0,
+    });
+
+    store.start();
+    store.setLane(2);
+    store.gameOver();
+    store.setLane(0);
+    store.setSpeed(40);
+    expect(store.getState().lane).toBe(2);
+    expect(store.getState().speed).toBe(0);
   });
 
   it('clamps lane requests into 0..LANE_COUNT-1', () => {
@@ -68,8 +83,9 @@ describe('GameStore', () => {
     expect(store.getState().lane).toBe(2);
   });
 
-  it('setSpeed never goes negative', () => {
+  it('setSpeed changes playing speed but never goes negative', () => {
     const store = new GameStore();
+    store.start();
     store.setSpeed(40);
     expect(store.getState().speed).toBe(40);
     store.setSpeed(-99);

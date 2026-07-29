@@ -60,7 +60,9 @@ test('boots, exposes the game-core contract, and drives the state machine', asyn
     ready: true,
   });
 
-  // Menu screenshot for visual review.
+  // Wait for the loading-to-menu cross-fade before capturing the visual artifact.
+  await expect(page.locator('#hud')).toHaveAttribute('data-screen', 'menu');
+  await expect(page.locator('#hud .screen.menu')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: 'test-results/menu.png', fullPage: true });
 
   // start() -> playing, with the road now moving.
@@ -84,8 +86,9 @@ test('boots, exposes the game-core contract, and drives the state machine', asyn
   // __spawnFriend is a wired (stub) hook: it must exist and not throw.
   await page.evaluate(() => window.__GARY__?.__spawnFriend());
 
-  // Let a few frames pass so the road scrolls, then capture an in-play frame.
+  // Let a few frames pass so the road scrolls. Foundation owns no scoring rule.
   await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.__GARY__?.score)).toBe(0);
   await page.screenshot({ path: 'test-results/playing.png', fullPage: true });
 
   // Deterministic collision -> gameover.
@@ -97,21 +100,24 @@ test('boots, exposes the game-core contract, and drives the state machine', asyn
   await page.waitForTimeout(600);
   await page.screenshot({ path: 'test-results/gameover.png', fullPage: true });
 
-  // Restart from gameover -> a clean playing run. Read in the same synchronous
-  // block as start() so a rendered frame can't trickle score in between.
-  const restarted = await page.evaluate(() => {
-    window.__GARY__?.start();
-    return {
-      state: window.__GARY__?.state,
-      score: window.__GARY__?.score,
-      friends: window.__GARY__?.friends,
-      lane: window.__GARY__?.lane,
-    };
-  });
+  // Restart from gameover -> a clean playing run that remains clean after frames.
+  await page.evaluate(() => window.__GARY__?.start());
+  await expect
+    .poll(() => page.evaluate(() => window.__GARY__?.state))
+    .toBe('playing');
+  await page.waitForTimeout(250);
+  const restarted = await page.evaluate(() => ({
+    state: window.__GARY__?.state,
+    score: window.__GARY__?.score,
+    friends: window.__GARY__?.friends,
+    lane: window.__GARY__?.lane,
+    speed: window.__GARY__?.speed,
+  }));
   expect(restarted.state).toBe('playing');
   expect(restarted.score).toBe(0);
   expect(restarted.friends).toBe(0);
   expect(restarted.lane).toBe(1);
+  expect(restarted.speed).toBeGreaterThan(0);
 
   // No console errors the whole time.
   expect(consoleErrors).toEqual([]);
