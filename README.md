@@ -1,10 +1,15 @@
 # Gary and Friends
 
-A three.js browser game — **shared foundation + test harness**. It renders the
-game core: a scrolling 3-lane night highway, "Gary" the googly-eyed road cone
-lerping between lanes, a chase camera, and the menu → playing → gameover →
-restart state machine with a telemetry HUD. Gameplay (traffic, friends, scoring
-rules) gets built on top of this by the factory.
+A three.js browser game. Gary the googly-eyed road cone weaves a 3-lane night
+highway, dodging oncoming traffic; the score climbs with distance, the speed
+ramps as the run goes on, and one hit flattens him. Threading a gap tight pays
+a near-miss bonus, so the optimal line is the risky one.
+
+Keyboard: **←/→** or **A/D** to change lane, **Space** to start or restart.
+
+Under it sits a **shared foundation + test harness**: the scrolling highway, the
+chase camera, the menu → playing → gameover → restart state machine, a telemetry
+HUD, and a reusable pure-logic entity layer that friends (ticket 03) build on.
 
 The point of this repo is a **green-gated, browser-testable canvas-game
 architecture**: game logic is kept separable from rendering, and a runtime test
@@ -48,10 +53,13 @@ interface GaryTestApi {
   readonly lane: number;                            // 0..2, mirrors GameState.lane
   readonly speed: number;                           // mirrors GameState.speed
   readonly ready: boolean;                          // true after 1st WebGL frame
+  readonly entities: number;                        // live world entities (traffic)
+  readonly nearestAhead: { distance, lane } | null;  // next vehicle ahead
+  readonly nearMisses: number;                      // gaps threaded this run
   start(): void;                                     // menu|gameover -> playing
   __setLane(n: number): void;                        // move Gary to lane n
   __forceCollision(): void;                          // force -> gameover
-  __spawnFriend(): void;                             // spawn a friend (stub: 02)
+  __spawnFriend(): void;                             // spawn a friend (stub: 03)
 }
 
 declare global {
@@ -67,8 +75,15 @@ Menu values: `state: 'menu'`, `score: 0`, `friends: 0`, `lane: 1` (centre),
 **Deterministic test hooks** (`__`-prefixed) force specific situations so e2e
 never depends on random spawns. Their names/signatures are **pinned by the
 foundation** — later tickets fill in behaviour without renaming. `__setLane` and
-`__forceCollision` are wired now; `__spawnFriend` is a declared no-op stub until
-friend-spawning lands (ticket 02).
+`__forceCollision` are wired (the latter injects a vehicle onto Gary and lets
+the *real* collision predicate end the run, so the hook exercises collision
+rather than just the state machine); `__spawnFriend` is a declared no-op stub
+until friend-spawning lands (ticket 03).
+
+`entities` / `nearestAhead` / `nearMisses` project the live gameplay
+simulation, letting e2e assert that traffic really spawns, that restart clears
+the road, that a screenshot is taken with a vehicle actually in frame, and that
+the near-miss rule fired — without racing a 0.6s CSS animation.
 
 **Extending it (factory guidance):**
 
@@ -86,20 +101,74 @@ friend-spawning lands (ticket 02).
   `speed` and `friends`, plus the transitions/subscriptions. Actions: `start`
   (also the restart path), `addScore`, `addFriends`, `setLane` (clamped),
   `setSpeed`, `gameOver`, `reset`. Test: `src/game/state.test.ts`.
+- **Gameplay simulation (pure):** `src/game/gameplay/` — `run.ts` (`Run`: ticks
+  the world, owns distance/score/collision/near-misses and talks to the world
+  only through store actions) and `difficulty.ts` (the speed ramp and
+  score-by-distance rules as plain functions of distance travelled).
+- **Entities (pure, reusable):** `src/game/entities/` — see below.
 - **Test API (the bridge):** `src/testApi.ts` — projects `GameStore` onto
   `window.__GARY__` (getters) and exposes the deterministic `__`-hooks.
 - **Rendering (three.js, browser-only):** `src/main.ts` (scene, fog, the two
   camera rigs + animation loop), `src/scene/gary.ts` (procedural googly-eyed cone) and
   `src/scene/road.ts` (`Road`: 3-lane highway with instanced, recycled
-  dash/barrier/light families scrolled by visual speed). `src/audio.ts` owns the
+  dash/barrier/light families scrolled by visual speed) and
+  `src/scene/traffic.ts` (`Traffic`: one instanced mesh per vehicle silhouette,
+  placed each frame from the simulation's entities). `src/audio.ts` owns the
   gesture-unlocked synth feedback, and `src/theme.ts` pins the 3D brand tokens to
   their CSS counterparts. This side *reads* the store and never owns state.
 - **DOM overlay:** `src/ui/hud.ts` — menu / telemetry HUD / game-over card and
   the async loading skeleton, a projection of the store like the test API.
-- **Browser e2e:** `e2e/smoke.spec.ts`.
+- **Browser e2e:** `e2e/smoke.spec.ts`, `e2e/gameplay.spec.ts`.
 
 Keeping state out of the renderer is what makes the game testable both fast
 (Vitest on `GameStore`) and for real (Playwright via `__GARY__`).
+
+## The reusable entity layer (`src/game/entities/`)
+
+Everything that travels down the highway toward Gary rides on one pooled,
+pure-logic abstraction. **Traffic is just its first consumer — friends
+(ticket 03) should be its second, not a parallel implementation.**
+
+| Module         | What it owns                                                       |
+| -------------- | ------------------------------------------------------------------ |
+| `entity.ts`    | The `Entity` shape: lane, `z`/`prevZ`, size, kind, variant, active |
+| `field.ts`     | `EntityField` — the pool: spawn cadence, movement, recycling        |
+| `collision.ts` | Swept lane/AABB hit tests + `findHit(entities, collider, kind)`     |
+| `lanes.ts`     | `LANE_WIDTH` / `laneToX` (world geometry, needed without three.js)  |
+| `rng.ts`       | Seeded `createRng` — gameplay never calls `Math.random()`           |
+| `traffic.ts`   | The traffic *rules* built on the above (spawn lane, cadence, sizes) |
+
+To add a new kind of world object:
+
+```ts
+const friends = new EntityField({
+  capacity: 12,
+  rng: createRng(seed),
+  interval: (speed) => 90 / speed,           // cadence scales with speed
+  spawn: (rng, occupiedLanes) => ({ kind: 'friend', lane, z, ... } | null),
+});
+
+friends.update(dt, state.speed);             // move + recycle + spawn
+const hit = findHit(friends.entities, garyCollider, 'friend', laneToX);
+if (hit) { friends.despawn(hit); store.addFriends(); }
+```
+
+Tick it inside `Run.update()` and render it by reading `friends.entities` (see
+`src/scene/traffic.ts` for the instanced-mesh pattern). A friend is collected by
+the *same* predicate that flattens Gary — only the `kind` and the consequence
+differ. `EntityField.inject()` places an entity with exact values, which is how
+`__forceCollision()` works and how `__spawnFriend()` should.
+
+Two invariants are load-bearing and worth not breaking:
+
+- **Collision is swept, not sampled.** Traffic closes at up to ~65 units/sec —
+  further per frame than a hitbox is deep. `Entity.prevZ` records the start of
+  each tick and the tests use the interval `[prevZ, z]`, so nothing tunnels
+  through Gary at speed.
+- **There is always a passable lane.** `pickSpawnLane` refuses to take the last
+  free lane, and all traffic shares one closing speed (`TRAFFIC_APPROACH`) so
+  nothing overtakes and gaps present at spawn survive to the player. Give
+  friends their own speed only if you're willing to re-derive that guarantee.
 
 ## Presentation notes (for anyone extending the visuals)
 
@@ -110,6 +179,14 @@ Keeping state out of the renderer is what makes the game testable both fast
   `start()` reads as a continuous camera move rather than a cut, and a menu-only
   hero light cross-fades out on the same easing. Add new framings as rigs here
   rather than mutating the camera ad hoc.
+- **Traffic is read by light, not by colour, and that is a fairness rule.** The
+  lamps and side reflectors set `fog: false` so headlights punch through the
+  scene fog: an obstacle you cannot see in time isn't difficulty, it's a bad
+  screen. Vehicle bodies are low-`metalness` on purpose — there is no
+  environment map here, so a metallic PBR surface reflects nothing and renders
+  black. Bodies stay desaturated cool greys and the reflectors are cool white,
+  because the one owned accent is Gary's and must never compete with an
+  obstacle.
 - **Reduced motion is honoured in 3D, not just CSS.** `prefers-reduced-motion`
   snaps the rig transition and stills Gary's idle bob (`reducedMotion` in
   `main.ts`), matching the media query in `hud.ts`.

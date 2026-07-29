@@ -28,15 +28,31 @@ import {
   WebGLRenderer,
 } from 'three';
 import { GameAudio } from './audio.ts';
+import { Run } from './game/gameplay/run.ts';
 import { GameStore } from './game/state.ts';
 import { createGary } from './scene/gary.ts';
 import { laneToX, Road } from './scene/road.ts';
+import { Traffic } from './scene/traffic.ts';
 import { installTestApi, type GaryTestHooks } from './testApi.ts';
 import { BG } from './theme.ts';
 import { Hud } from './ui/hud.ts';
 
 const store = new GameStore();
 const audio = new GameAudio();
+
+// Feedback for threading a gap: a whoosh cue plus a short accent pulse the HUD
+// and the lighting both read. Set by the simulation, decayed by the loop.
+let nearMissFlash = 0;
+
+// The gameplay simulation (traffic, scoring, difficulty ramp, collision). Pure
+// logic — this file only ticks it and draws whatever it says.
+const run = new Run(store, {
+  onNearMiss: () => {
+    nearMissFlash = 1;
+    audio.nearMiss();
+    hud.pulse();
+  },
+});
 
 // Honour the OS reduced-motion preference in the 3D layer too, not just CSS:
 // camera sweeps snap instead of easing, and Gary's idle bob is stilled.
@@ -54,10 +70,26 @@ let hasRenderedFrame = false;
 // renaming anything.
 const hooks: GaryTestHooks = {
   setLane: (n) => store.setLane(n),
-  forceCollision: () => store.gameOver(),
+  // Goes through the real collision predicate (Run.forceCollision injects a
+  // vehicle onto Gary), so the e2e hook exercises collision, not just state.
+  forceCollision: () => run.forceCollision(),
   spawnFriend: () => {
-    /* ticket 02 wires real friend spawning here */
+    /* ticket 03 wires real friend spawning here — add a second EntityField
+       beside run.traffic and inject into it; see src/game/entities/field.ts */
   },
+  entityCount: () => run.traffic.activeCount,
+  nearestAhead: () => {
+    let nearest: { distance: number; lane: number } | null = null;
+    for (const e of run.traffic.entities) {
+      if (!e.active || e.z > 0) continue;
+      const distance = -e.z;
+      if (nearest === null || distance < nearest.distance) {
+        nearest = { distance, lane: e.lane };
+      }
+    }
+    return nearest;
+  },
+  nearMissCount: () => run.nearMisses,
 };
 installTestApi(store, () => hasRenderedFrame, hooks);
 
@@ -114,7 +146,8 @@ container.appendChild(renderer.domElement);
 // Lighting — a cool night sky with a warm key, so Gary's orange pops.
 scene.add(new HemisphereLight(0x5566aa, 0x0a0a12, 0.7));
 scene.add(new AmbientLight(0xffffff, 0.25));
-const key = new DirectionalLight(0xfff1e0, 1.5);
+const KEY_LIGHT_BASE = 1.5;
+const key = new DirectionalLight(0xfff1e0, KEY_LIGHT_BASE);
 key.position.set(4, 8, 6);
 scene.add(key);
 const rim = new DirectionalLight(0x6688ff, 0.6);
@@ -142,6 +175,10 @@ scene.add(ground);
 const road = new Road();
 scene.add(road.group);
 
+// Oncoming traffic — instanced meshes driven entirely by run.traffic entities.
+const traffic = new Traffic();
+scene.add(traffic.group);
+
 // Gary — stays at world z=0; the road scrolls past him. Lane drives his X.
 const gary = createGary();
 gary.position.set(laneToX(store.getState().lane), 0, 0);
@@ -155,7 +192,15 @@ let crashSpinTarget = 0;
 let previousState = store.getState();
 store.subscribe((state) => {
   if (state.status !== previousState.status) {
-    if (state.status === 'playing') audio.start();
+    if (state.status === 'playing') {
+      // Every entry into play is a clean run: clear traffic, distance and the
+      // spawn grace period. GameStore.start() already reset score/speed/lane.
+      run.reset();
+      traffic.sync(run.traffic.entities);
+      gary.position.x = laneToX(state.lane);
+      visualSpeed = 0;
+      audio.start();
+    }
     if (state.status === 'gameover') {
       audio.crash();
       shake = reducedMotion ? 0 : 0.2;
@@ -217,6 +262,13 @@ function frame(now: number): void {
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
   time += dt;
+
+  // Tick the simulation FIRST, so everything drawn this frame reflects the same
+  // instant: distance/score/speed ramp, traffic movement + spawning, collision.
+  // Gary's rendered X is fed back in so a hit matches the cone you can see.
+  run.setGaryX(gary.position.x);
+  run.update(dt);
+  traffic.sync(run.traffic.entities);
 
   const s = store.getState();
   const menuFraming = s.status === 'menu';
@@ -295,6 +347,17 @@ function frame(now: number): void {
     camLambda,
     dt,
   );
+
+  // Near miss: a brief warm bloom on the key light and a small camera kick, so
+  // squeezing past a truck is felt in the scene and not only in the HUD.
+  if (nearMissFlash > 0.001) {
+    nearMissFlash *= Math.exp(-7 * dt);
+    key.intensity = KEY_LIGHT_BASE + nearMissFlash * 1.5;
+    if (!reducedMotion) camera.position.y += nearMissFlash * 0.06;
+  } else {
+    nearMissFlash = 0;
+    key.intensity = KEY_LIGHT_BASE;
+  }
 
   renderer.render(scene, camera);
 

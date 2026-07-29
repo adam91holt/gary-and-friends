@@ -86,9 +86,10 @@ test('boots, exposes the game-core contract, and drives the state machine', asyn
   // __spawnFriend is a wired (stub) hook: it must exist and not throw.
   await page.evaluate(() => window.__GARY__?.__spawnFriend());
 
-  // Let a few frames pass so the road scrolls. Foundation owns no scoring rule.
+  // Let a few frames pass so the road scrolls. Gameplay scores by distance
+  // travelled, so the score climbs off zero once the run is under way.
   await page.waitForTimeout(500);
-  expect(await page.evaluate(() => window.__GARY__?.score)).toBe(0);
+  expect(await page.evaluate(() => window.__GARY__?.score ?? 0)).toBeGreaterThan(0);
   await page.screenshot({ path: 'test-results/playing.png', fullPage: true });
 
   // Deterministic collision -> gameover.
@@ -100,24 +101,27 @@ test('boots, exposes the game-core contract, and drives the state machine', asyn
   await page.waitForTimeout(600);
   await page.screenshot({ path: 'test-results/gameover.png', fullPage: true });
 
-  // Restart from gameover -> a clean playing run that remains clean after frames.
-  await page.evaluate(() => window.__GARY__?.start());
-  await expect
-    .poll(() => page.evaluate(() => window.__GARY__?.state))
-    .toBe('playing');
-  await page.waitForTimeout(250);
-  const restarted = await page.evaluate(() => ({
-    state: window.__GARY__?.state,
-    score: window.__GARY__?.score,
-    friends: window.__GARY__?.friends,
-    lane: window.__GARY__?.lane,
-    speed: window.__GARY__?.speed,
-  }));
+  // Restart from gameover -> a clean playing run. Read the reset values in the
+  // same evaluate as start(), so no frame can tick the distance score up in
+  // between; then confirm it is genuinely running.
+  const restarted = await page.evaluate(() => {
+    window.__GARY__?.start();
+    return {
+      state: window.__GARY__?.state,
+      score: window.__GARY__?.score,
+      friends: window.__GARY__?.friends,
+      lane: window.__GARY__?.lane,
+      speed: window.__GARY__?.speed,
+    };
+  });
   expect(restarted.state).toBe('playing');
   expect(restarted.score).toBe(0);
   expect(restarted.friends).toBe(0);
   expect(restarted.lane).toBe(1);
   expect(restarted.speed).toBeGreaterThan(0);
+
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => window.__GARY__?.state)).toBe('playing');
 
   // No console errors the whole time.
   expect(consoleErrors).toEqual([]);

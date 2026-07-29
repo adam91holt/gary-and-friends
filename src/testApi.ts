@@ -32,6 +32,20 @@ export interface GaryTestHooks {
   forceCollision: () => void;
   /** Spawn a collectible friend into the world. */
   spawnFriend: () => void;
+  /** How many entities are live in the world right now (traffic, friends). */
+  entityCount: () => number;
+  /** The nearest live entity still ahead of Gary (null if the road is clear). */
+  nearestAhead: () => NearestEntity | null;
+  /** Vehicles threaded closely this run. */
+  nearMissCount: () => number;
+}
+
+/** A read-only snapshot of the next thing Gary is about to meet. */
+export interface NearestEntity {
+  /** Distance ahead of Gary in world units (always positive). */
+  readonly distance: number;
+  /** Which lane it occupies (0..2). */
+  readonly lane: number;
 }
 
 export interface GaryTestApi {
@@ -47,6 +61,24 @@ export interface GaryTestApi {
   readonly speed: number;
   /** True once the WebGL scene has rendered at least one frame. */
   readonly ready: boolean;
+  /**
+   * Live world entities (traffic today, friends once 03 lands). Lets e2e assert
+   * that traffic actually spawns during a run and that restart clears it,
+   * neither of which is visible in the store.
+   */
+  readonly entities: number;
+  /**
+   * The nearest entity still ahead of Gary (distance + lane), or null when the
+   * road ahead is clear. Lets a test wait for traffic to be genuinely in frame
+   * before a screenshot, and steer deterministically relative to it.
+   */
+  readonly nearestAhead: NearestEntity | null;
+  /**
+   * Vehicles Gary has threaded closely this run (reset by start()). Unlike the
+   * HUD toast — which is a short animation — this is durable, so a test can
+   * assert the near-miss rule fired without racing the CSS.
+   */
+  readonly nearMisses: number;
   /** Begin / restart play (menu|gameover -> playing). */
   start: () => void;
   /** Deterministic hook: move Gary to lane n. */
@@ -92,6 +124,15 @@ export function installTestApi(
     },
     get ready() {
       return isReady();
+    },
+    get entities() {
+      return hooks.entityCount();
+    },
+    get nearestAhead() {
+      return hooks.nearestAhead();
+    },
+    get nearMisses() {
+      return hooks.nearMissCount();
     },
     start() {
       store.start();

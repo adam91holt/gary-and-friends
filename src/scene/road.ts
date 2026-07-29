@@ -10,8 +10,13 @@ import {
   MeshStandardMaterial,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CENTER_LANE, LANE_COUNT } from '../game/state.ts';
+import { LANE_WIDTH, ROAD_HALF } from '../game/entities/lanes.ts';
 import { ACCENT, ACCENT_2 } from '../theme.ts';
+
+// The lane geometry itself is pure game data (collision and spawning need it
+// without three.js), so it lives in game/entities/lanes.ts. Re-exported here so
+// the renderer's existing `from './scene/road.ts'` import path is unchanged.
+export { LANE_WIDTH, laneToX } from '../game/entities/lanes.ts';
 
 /**
  * The scrolling highway environment: a 3-lane road, recycled dashed lane
@@ -23,20 +28,6 @@ import { ACCENT, ACCENT_2 } from '../theme.ts';
  * far distance when it passes, giving an endless road and a sense of speed. It
  * reads nothing from the game store — `main.ts` feeds it the current speed.
  */
-
-/** Distance between lane centres (world units). */
-export const LANE_WIDTH = 2.4;
-/** Half-width of the drivable road surface: outer lane centre + half a lane. */
-const ROAD_HALF = LANE_WIDTH * 1.5;
-
-/** Map a lane index to world-space X using the shared lane contract. */
-export function laneToX(lane: number): number {
-  const rounded = Math.round(lane);
-  const clamped = Number.isNaN(rounded)
-    ? 0
-    : Math.max(0, Math.min(LANE_COUNT - 1, rounded));
-  return (clamped - CENTER_LANE) * LANE_WIDTH;
-}
 
 /** Props wrap once they scroll past this Z (just behind the chase camera). */
 const NEAR_Z = 14;
