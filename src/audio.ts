@@ -19,6 +19,11 @@ export class GameAudio {
     this.tone(180, 105, 0.11, 0.025, 'square');
   }
 
+  /** Doppler-ish whoosh as a vehicle rushes past inches away. */
+  nearMiss(): void {
+    this.tone(520, 190, 0.16, 0.03, 'sine');
+  }
+
   crash(): void {
     this.tone(105, 38, 0.42, 0.14, 'triangle');
   }

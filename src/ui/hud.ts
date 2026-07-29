@@ -14,8 +14,9 @@
  * as a retro highway instrument cluster — mono telemetry numerals, an accent
  * speed bar, a card that docks over the moving road rather than covering it.
  */
+import { intensityForSpeed } from '../game/gameplay/difficulty.ts';
+import { NEAR_MISS_BONUS } from '../game/gameplay/run.ts';
 import type { GameState, GameStore, GameStatus } from '../game/state.ts';
-import { BASE_SPEED } from '../game/state.ts';
 
 /* ── Icon set (one family: 24×24, stroke 2, round caps) ───────────────────── */
 
@@ -26,6 +27,8 @@ const icon = {
   friend: `<svg viewBox="0 0 24 24" ${ns}><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 6"/><path d="M17 14.4A5.5 5.5 0 0 1 20.5 20"/></svg>`,
   speed: `<svg viewBox="0 0 24 24" ${ns}><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-5"/><circle cx="12" cy="18" r="1"/></svg>`,
   play: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13l11-6.5z"/></svg>`,
+  // Speed-lines chevron: the "you threaded that one" mark.
+  nearMiss: `<svg viewBox="0 0 24 24" ${ns}><path d="M13 4 6 12l7 8"/><path d="M20 4l-7 8 7 8"/></svg>`,
   crash: `<svg viewBox="0 0 24 24" ${ns}><path d="M4 18h16L15.5 7h-7z"/><path d="M8 14h8M7 4 5.5 2M17 4l1.5-2M19 8l2-1"/></svg>`,
 };
 
@@ -191,6 +194,34 @@ const CSS = `
   transition: transform 0.25s var(--ease);
 }
 
+/* Near-miss toast — the reward for the risky line. Sits under the playbar so it
+   reads as instrument feedback, not a notification. Transform/opacity only. */
+#hud .nearmiss {
+  position: absolute; top: 124px; left: 50%;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px 7px 11px; border-radius: 999px;
+  color: var(--accent-2);
+  background: var(--surface-hud); border: 1px solid var(--accent-glow);
+  box-shadow: 0 6px 22px var(--accent-glow);
+  backdrop-filter: blur(10px);
+  font-size: var(--fs-label); font-weight: 700;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  opacity: 0; transform: translate(-50%, -6px);
+  pointer-events: none;
+}
+#hud .nearmiss svg { width: 15px; height: 15px; }
+#hud .nearmiss .pts {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  letter-spacing: 0; color: var(--accent);
+}
+#hud .nearmiss.show { animation: nearmiss 0.62s var(--ease); }
+@keyframes nearmiss {
+  0%   { opacity: 0; transform: translate(-50%, 2px) scale(0.94); }
+  18%  { opacity: 1; transform: translate(-50%, -6px) scale(1); }
+  70%  { opacity: 1; transform: translate(-50%, -8px) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -16px) scale(1); }
+}
+
 /* Game-over stats. */
 #hud .stats { display: flex; gap: 28px; justify-content: center; margin-top: 20px; }
 #hud .stat .n {
@@ -258,6 +289,13 @@ const CSS = `
   #hud[data-screen="gameover"] .screen.gameover .stats,
   #hud[data-screen="gameover"] .screen.gameover .btn,
   #hud .sk::after { animation: none; }
+  /* The toast still appears (feedback is not optional) — it just fades rather
+     than travelling. */
+  #hud .nearmiss.show { animation: nearmiss-rm 0.62s linear; }
+  @keyframes nearmiss-rm {
+    0%, 100% { opacity: 0; }
+    18%, 70% { opacity: 1; }
+  }
 }
 `;
 
@@ -280,6 +318,7 @@ export class Hud {
   private readonly friendsRO: HTMLElement;
   private readonly finalScore: HTMLElement;
   private readonly finalFriends: HTMLElement;
+  private readonly nearMiss: HTMLElement;
   private readonly reducedMotion = window.matchMedia(
     '(prefers-reduced-motion: reduce)',
   );
@@ -308,6 +347,7 @@ export class Hud {
     this.friendsRO = this.q('#ro-friends');
     this.finalScore = this.q('#final-score');
     this.finalFriends = this.q('#final-friends');
+    this.nearMiss = this.q('#nearmiss');
 
     this.q<HTMLButtonElement>('#startBtn').addEventListener('click', () => {
       this.onUserGesture();
@@ -323,6 +363,18 @@ export class Hud {
     this.render(this.prev);
   }
 
+  /**
+   * Flash the near-miss toast. Called by the renderer when the simulation
+   * reports Gary threaded a gap — the HUD stays a projection and never decides
+   * that a near miss happened.
+   */
+  pulse(): void {
+    if (this.store.getState().status !== 'playing') return;
+    this.nearMiss.classList.remove('show');
+    void this.nearMiss.offsetWidth; // restart the animation
+    this.nearMiss.classList.add('show');
+  }
+
   /** Called by the renderer once the first WebGL frame has landed. */
   setReady(): void {
     if (this.ready) return;
@@ -333,13 +385,25 @@ export class Hud {
   private render(s: GameState): void {
     this.root.dataset.screen = this.ready ? STATUS_TO_SCREEN[s.status] : 'loading';
 
+    // A toast must never outlive the run it belongs to (e.g. a crash landing
+    // one frame after a near miss).
+    if (s.status !== 'playing' && this.prev.status === 'playing') {
+      this.nearMiss.classList.remove('show');
+    }
+
     this.scoreVal.textContent = String(s.score);
     this.friendsVal.textContent = String(s.friends);
     this.speedVal.textContent = String(Math.round(s.speed * 4)); // stylised km/h
-    const throttle = Math.max(0, Math.min(1, s.speed / (BASE_SPEED * 1.5)));
+    // The bar reads the same difficulty curve the simulation ramps along, so
+    // "bar full" genuinely means "top speed" rather than an invented ceiling.
+    const throttle = intensityForSpeed(s.speed);
     this.speedFill.style.transform = `scaleX(${throttle.toFixed(3)})`;
 
-    if (s.score !== this.prev.score) this.flash(this.scoreRO);
+    // Distance score changes many times per second; bump only on a readable
+    // milestone instead of continuously restarting the animation.
+    if (Math.floor(s.score / 25) > Math.floor(this.prev.score / 25)) {
+      this.flash(this.scoreRO);
+    }
     if (s.friends !== this.prev.friends) this.flash(this.friendsRO);
 
     if (s.status === 'gameover' && this.prev.status !== 'gameover') {
@@ -440,6 +504,10 @@ export class Hud {
           <div class="bar"><i></i></div>
         </div>
         <div class="play-hint"><b>&larr; &rarr;</b> Switch lane</div>
+      </div>
+
+      <div class="nearmiss" id="nearmiss">
+        ${icon.nearMiss}<span>Near miss</span><span class="pts">+${NEAR_MISS_BONUS}</span>
       </div>
 
       <div class="screen gameover">
