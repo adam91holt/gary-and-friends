@@ -15,7 +15,9 @@
  * speed bar, a card that docks over the moving road rather than covering it.
  */
 import { intensityForSpeed } from '../game/gameplay/difficulty.ts';
+import type { FriendPickup } from '../game/gameplay/run.ts';
 import { NEAR_MISS_BONUS } from '../game/gameplay/run.ts';
+import { FRIENDS } from '../game/friends/roster.ts';
 import type { GameState, GameStore, GameStatus } from '../game/state.ts';
 
 /* ── Icon set (one family: 24×24, stroke 2, round caps) ───────────────────── */
@@ -30,6 +32,8 @@ const icon = {
   // Speed-lines chevron: the "you threaded that one" mark.
   nearMiss: `<svg viewBox="0 0 24 24" ${ns}><path d="M13 4 6 12l7 8"/><path d="M20 4l-7 8 7 8"/></svg>`,
   crash: `<svg viewBox="0 0 24 24" ${ns}><path d="M4 18h16L15.5 7h-7z"/><path d="M8 14h8M7 4 5.5 2M17 4l1.5-2M19 8l2-1"/></svg>`,
+  // A cone, in the same 24×24 stroke family — the roster rail's glyph.
+  cone: `<svg viewBox="0 0 24 24" ${ns}><path d="M12 3 6.5 18h11z"/><path d="M9.2 11h5.6"/><path d="M4 21h16"/></svg>`,
 };
 
 /* ── Component styles (tokens live in index.html :root) ────────────────────── */
@@ -222,6 +226,131 @@ const CSS = `
   100% { opacity: 0; transform: translate(-50%, -16px) scale(1); }
 }
 
+/* ── The convoy roster ─────────────────────────────────────────────────────
+   The committed idea for friends: a docked left-edge rail that is a *manifest*
+   of the crew, not a number. Each of the five named cones has a chip, dim and
+   unclaimed until you meet them, then lit in their own token colour with a
+   tally of how many are in tow. It is deliberately instrument-DENSE — this is
+   a scanning surface you read at a glance mid-run — and it gives the abstract
+   friends count a cast, which is the whole charm of the epic. Mirrors the
+   3D conga line: the rail fills as the tail grows. */
+#hud .roster {
+  position: absolute; left: 20px; top: 50%;
+  transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 12px 11px;
+  border-radius: 14px;
+  background: var(--surface-hud); border: 1px solid var(--hairline);
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 var(--hairline-strong);
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+  pointer-events: none;
+}
+#hud[data-screen="playing"] .roster,
+#hud[data-screen="gameover"] .roster { opacity: 1; }
+#hud .roster .cap {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 9px; margin-bottom: 3px;
+  border-bottom: 1px solid var(--hairline);
+}
+#hud .roster .cap .lbl {
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .roster .cap .tally {
+  font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--text-dim);
+}
+#hud .roster .cap .tally b { color: var(--accent); font-weight: 600; }
+
+/* One chip per named friend. Dense rows: glyph, name, count. */
+#hud .chip {
+  display: grid; grid-template-columns: 18px 1fr 20px;
+  align-items: center; gap: 8px;
+  padding: 4px 6px 4px 4px; border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+#hud .chip .g {
+  display: grid; place-items: center; width: 18px; height: 18px;
+  color: var(--text-faint);
+  transition: color 0.25s var(--ease), transform 0.25s var(--ease);
+}
+#hud .chip .g svg { width: 17px; height: 17px; }
+#hud .chip .nm {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--text-faint); white-space: nowrap;
+  transition: color 0.25s var(--ease);
+}
+#hud .chip .n {
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; text-align: right;
+  color: var(--text-faint); opacity: 0.45;
+  transition: color 0.25s var(--ease), opacity 0.25s var(--ease);
+}
+/* Met: the chip lights in that friend's own token colour. */
+#hud .chip.met {
+  background: rgba(255,255,255,0.05);
+  border-color: var(--hairline-strong);
+}
+#hud .chip.met .g { color: var(--tint); }
+#hud .chip.met .nm { color: var(--text); }
+#hud .chip.met .n { color: var(--tint); opacity: 1; }
+#hud .chip.pop { animation: chip-pop 0.42s var(--ease); }
+@keyframes chip-pop {
+  0%   { transform: translateX(0) scale(1); }
+  30%  { transform: translateX(4px) scale(1.05); }
+  100% { transform: translateX(0) scale(1); }
+}
+
+/* Narrow viewports: the game-over card would sit on top of the rail, so the
+   rail drops its names and becomes a compact column of tinted glyph+count —
+   still a manifest, just at the density the space allows. */
+@media (max-width: 760px) {
+  #hud .roster { left: 12px; padding: 9px; gap: 4px; }
+  #hud .roster .cap .lbl { display: none; }
+  #hud .chip { grid-template-columns: 18px 18px; gap: 5px; }
+  #hud .chip .nm { display: none; }
+  #hud .chip .n { text-align: left; }
+}
+
+/* The name flourish — the moment a friend joins the line. Same instrument
+   language as the near-miss toast, tinted to that friend, sitting below it so
+   the two can never collide. */
+#hud .collect {
+  position: absolute; top: 178px; left: 50%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px 9px 12px; border-radius: 999px;
+  background: var(--surface-hud);
+  border: 1px solid var(--tint, var(--accent-2));
+  box-shadow: 0 8px 26px rgba(0,0,0,0.45);
+  backdrop-filter: blur(10px);
+  opacity: 0; transform: translate(-50%, 0);
+  pointer-events: none;
+}
+#hud .collect svg { width: 17px; height: 17px; color: var(--tint, var(--accent-2)); }
+#hud .collect .who {
+  font-size: 0.9rem; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--text);
+}
+#hud .collect .joined {
+  font-size: var(--fs-label); font-weight: 600; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .collect .pts {
+  font-family: var(--font-mono); font-size: 0.86rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--tint, var(--accent-2));
+}
+#hud .collect.show { animation: collect 1.05s var(--ease); }
+@keyframes collect {
+  0%   { opacity: 0; transform: translate(-50%, 10px) scale(0.9); }
+  16%  { opacity: 1; transform: translate(-50%, 0) scale(1.04); }
+  26%  { transform: translate(-50%, 0) scale(1); }
+  74%  { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -14px) scale(1); }
+}
+
 /* Game-over stats. */
 #hud .stats { display: flex; gap: 28px; justify-content: center; margin-top: 20px; }
 #hud .stat .n {
@@ -231,6 +360,25 @@ const CSS = `
 #hud .stat .k {
   font-size: var(--fs-label); letter-spacing: 0.16em; text-transform: uppercase;
   color: var(--text-faint); margin-top: 4px;
+}
+/* Game-over: who actually came along. A row of tinted cone glyphs, one per
+   friend collected, capped so a heroic run doesn't overflow the card. Reading
+   the names back is the payoff for the whole verb. */
+#hud .convoy {
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hairline);
+}
+#hud .convoy:empty { display: none; }
+#hud .convoy .co {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px 4px 7px; border-radius: 999px;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--hairline);
+  font-size: 0.7rem; font-weight: 600; color: var(--text-dim);
+}
+#hud .convoy .co svg { width: 14px; height: 14px; color: var(--tint); }
+#hud .convoy .more {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  color: var(--accent);
 }
 #hud .crash { color: var(--danger); display: inline-grid; place-items: center; }
 #hud .crash svg { width: 40px; height: 40px; }
@@ -271,6 +419,10 @@ const CSS = `
   width: min(90vw, 460px); height: 300px; border-radius: 20px;
   margin-bottom: 12vh;
 }
+/* Deliberately NO rail skeleton: the skeleton models the MENU, which is what
+   the first frame resolves into, and the menu has no roster rail. Promising a
+   shape that then vanishes is worse than not promising it — the rail arrives
+   on its own transition when the run starts. */
 #hud .skeleton .sk-stage { display: grid; place-items: center start; }
 #hud .skeleton .sk-card { margin-left: clamp(24px, 7vw, 104px); }
 @media (max-width: 900px) {
@@ -283,6 +435,17 @@ const CSS = `
   #hud .screen, #hud .playbar { transition: opacity 0.2s linear; transform: none !important; }
   #hud .btn, #hud .readout .val, #hud .bar > i { transition: none; }
   #hud .readout.bump .val { animation: none; }
+  /* The rail must keep its centring transform; only the animation goes. */
+  #hud .roster { transform: translateY(-50%) !important; }
+  #hud .chip.pop { animation: none; }
+  /* The collect flourish still appears — naming your friend is the payoff and
+     feedback is not optional — it just fades instead of travelling. */
+  #hud .collect { transform: translate(-50%, 0) !important; }
+  #hud .collect.show { animation: collect-rm 1.05s linear; }
+  @keyframes collect-rm {
+    0%, 100% { opacity: 0; }
+    16%, 74% { opacity: 1; }
+  }
   #hud[data-screen="gameover"] .screen.gameover .crash,
   #hud[data-screen="gameover"] .screen.gameover .eyebrow,
   #hud[data-screen="gameover"] .screen.gameover .title,
@@ -319,10 +482,26 @@ export class Hud {
   private readonly finalScore: HTMLElement;
   private readonly finalFriends: HTMLElement;
   private readonly nearMiss: HTMLElement;
+  private readonly collect: HTMLElement;
+  private readonly collectName: HTMLElement;
+  private readonly collectPts: HTMLElement;
+  private readonly rosterMet: HTMLElement;
+  private readonly convoy: HTMLElement;
+  private readonly chips: HTMLElement[];
+  private readonly chipCounts: HTMLElement[];
   private readonly reducedMotion = window.matchMedia(
     '(prefers-reduced-motion: reduce)',
   );
   private countFrame: number | null = null;
+
+  /**
+   * How many of each named friend are in tow. The HUD's own presentation state
+   * — the store owns the *total*, this is only how the rail draws it — fed
+   * exclusively by `collected()` from the simulation, never inferred.
+   */
+  private readonly tally: number[] = FRIENDS.map(() => 0);
+  /** Names in join order, for the game-over convoy recap. */
+  private readonly joinOrder: number[] = [];
 
   private prev: GameState;
 
@@ -348,6 +527,13 @@ export class Hud {
     this.finalScore = this.q('#final-score');
     this.finalFriends = this.q('#final-friends');
     this.nearMiss = this.q('#nearmiss');
+    this.collect = this.q('#collect');
+    this.collectName = this.q('#collect-name');
+    this.collectPts = this.q('#collect-pts');
+    this.rosterMet = this.q('#roster-met');
+    this.convoy = this.q('#convoy');
+    this.chips = FRIENDS.map((_, i) => this.q(`#chip-${i}`));
+    this.chipCounts = FRIENDS.map((_, i) => this.q(`#chip-n-${i}`));
 
     this.q<HTMLButtonElement>('#startBtn').addEventListener('click', () => {
       this.onUserGesture();
@@ -375,6 +561,32 @@ export class Hud {
     this.nearMiss.classList.add('show');
   }
 
+  /**
+   * Announce a friend joining the conga line: name flourish + roster chip.
+   * Called by the renderer from the simulation's `onFriend` callback — the HUD
+   * is told *who* was collected, it never works it out from the count.
+   */
+  collected(pickup: FriendPickup): void {
+    if (this.store.getState().status !== 'playing') return;
+
+    const index = Math.max(0, Math.min(FRIENDS.length - 1, pickup.variant));
+    this.tally[index]++;
+    this.joinOrder.push(index);
+    this.paintRoster();
+
+    const chip = this.chips[index];
+    chip.classList.remove('pop');
+    void chip.offsetWidth; // restart the animation
+    chip.classList.add('pop');
+
+    this.collect.style.setProperty('--tint', `var(--friend-${index + 1})`);
+    this.collectName.textContent = pickup.name;
+    this.collectPts.textContent = `+${pickup.points}`;
+    this.collect.classList.remove('show');
+    void this.collect.offsetWidth;
+    this.collect.classList.add('show');
+  }
+
   /** Called by the renderer once the first WebGL frame has landed. */
   setReady(): void {
     if (this.ready) return;
@@ -386,9 +598,18 @@ export class Hud {
     this.root.dataset.screen = this.ready ? STATUS_TO_SCREEN[s.status] : 'loading';
 
     // A toast must never outlive the run it belongs to (e.g. a crash landing
-    // one frame after a near miss).
+    // one frame after a near miss, or one frame after a pickup).
     if (s.status !== 'playing' && this.prev.status === 'playing') {
       this.nearMiss.classList.remove('show');
+      this.collect.classList.remove('show');
+    }
+
+    // A fresh run empties the roster, exactly as it empties the conga line.
+    // Driven off the store's own reset (friends back to 0) rather than a
+    // separate signal, so the rail can never disagree with the counter.
+    if (s.friends === 0 && this.prev.friends !== 0) this.resetRoster();
+    if (s.status === 'playing' && this.prev.status !== 'playing') {
+      this.resetRoster();
     }
 
     this.scoreVal.textContent = String(s.score);
@@ -408,6 +629,7 @@ export class Hud {
 
     if (s.status === 'gameover' && this.prev.status !== 'gameover') {
       this.countFinalStats(s.score, s.friends);
+      this.paintConvoy();
     } else if (s.status !== 'gameover') {
       this.cancelCount();
       this.finalScore.textContent = String(s.score);
@@ -438,6 +660,44 @@ export class Hud {
     this.finalScore.textContent = '0';
     this.finalFriends.textContent = '0';
     this.countFrame = requestAnimationFrame(tick);
+  }
+
+  /** Redraw the rail from the tally. Chips light once you've met that friend. */
+  private paintRoster(): void {
+    let met = 0;
+    for (let i = 0; i < FRIENDS.length; i++) {
+      const count = this.tally[i];
+      if (count > 0) met++;
+      this.chips[i].classList.toggle('met', count > 0);
+      this.chipCounts[i].textContent = String(count);
+    }
+    this.rosterMet.textContent = String(met);
+  }
+
+  private resetRoster(): void {
+    this.tally.fill(0);
+    this.joinOrder.length = 0;
+    for (const chip of this.chips) chip.classList.remove('pop');
+    this.paintRoster();
+    this.convoy.innerHTML = '';
+  }
+
+  /**
+   * The game-over recap: who actually came along, in join order. Capped so a
+   * long convoy summarises ("+7 more") instead of blowing out the card.
+   */
+  private paintConvoy(): void {
+    const SHOWN = 8;
+    const shown = this.joinOrder.slice(0, SHOWN);
+    const rest = this.joinOrder.length - shown.length;
+    const chips = shown
+      .map(
+        (i) =>
+          `<span class="co" style="--tint: var(--friend-${i + 1});">${icon.cone}${FRIENDS[i].short}</span>`,
+      )
+      .join('');
+    this.convoy.innerHTML =
+      chips + (rest > 0 ? `<span class="co more">+${rest} more</span>` : '');
   }
 
   private cancelCount(): void {
@@ -506,8 +766,30 @@ export class Hud {
         <div class="play-hint"><b>&larr; &rarr;</b> Switch lane</div>
       </div>
 
+      <div class="roster" id="roster">
+        <div class="cap">
+          <span class="lbl">Convoy</span>
+          <span class="tally"><b id="roster-met">0</b>/${FRIENDS.length}</span>
+        </div>
+        ${FRIENDS.map(
+          (f, i) => `
+        <div class="chip" id="chip-${i}" style="--tint: var(--friend-${i + 1});">
+          <span class="g">${icon.cone}</span>
+          <span class="nm">${f.short}</span>
+          <span class="n" id="chip-n-${i}">0</span>
+        </div>`,
+        ).join('')}
+      </div>
+
       <div class="nearmiss" id="nearmiss">
         ${icon.nearMiss}<span>Near miss</span><span class="pts">+${NEAR_MISS_BONUS}</span>
+      </div>
+
+      <div class="collect" id="collect">
+        ${icon.cone}
+        <span class="who" id="collect-name"></span>
+        <span class="joined">joined</span>
+        <span class="pts" id="collect-pts"></span>
       </div>
 
       <div class="screen gameover">
@@ -520,6 +802,7 @@ export class Hud {
             <div class="stat"><div class="n" id="final-score">0</div><div class="k">Score</div></div>
             <div class="stat"><div class="n" id="final-friends">0</div><div class="k">Friends</div></div>
           </div>
+          <div class="convoy" id="convoy"></div>
           <button class="btn" id="restartBtn">${icon.play}<span>Run it back</span></button>
           <div class="legend"><span><b>Space</b> Restart</span></div>
         </div>

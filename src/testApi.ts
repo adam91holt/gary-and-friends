@@ -17,7 +17,10 @@
  *
  *   __setLane(n)      — move Gary to lane n (0..2). Wired now.
  *   __forceCollision()— force the game into gameover. Wired now (store.gameOver).
- *   __spawnFriend()   — spawn a collectible friend. STUB until ticket 02.
+ *   __spawnFriend()   — spawn a collectible friend. Wired now: injects a friend
+ *                       into Gary's lane just ahead of him and lets the normal
+ *                       collision path collect it, so the hook exercises the
+ *                       real pickup rule rather than poking store state.
  *
  * The renderer supplies the concrete implementations (see GaryTestHooks) so this
  * module stays free of game/render specifics.
@@ -38,6 +41,8 @@ export interface GaryTestHooks {
   nearestAhead: () => NearestEntity | null;
   /** Vehicles threaded closely this run. */
   nearMissCount: () => number;
+  /** How many friends are currently trailing Gary in the conga line. */
+  congaLength: () => number;
 }
 
 /** A read-only snapshot of the next thing Gary is about to meet. */
@@ -79,13 +84,26 @@ export interface GaryTestApi {
    * assert the near-miss rule fired without racing the CSS.
    */
   readonly nearMisses: number;
+  /**
+   * Friends currently trailing Gary in the conga line. Distinct from `friends`:
+   * that is the store's *count collected this run*, this is how many cones are
+   * actually in the world behind him. They agree in normal play, which is
+   * precisely why asserting on both is worth doing — it catches a HUD counter
+   * that rises without the line growing, and vice versa.
+   */
+  readonly conga: number;
   /** Begin / restart play (menu|gameover -> playing). */
   start: () => void;
   /** Deterministic hook: move Gary to lane n. */
   __setLane: (n: number) => void;
   /** Deterministic hook: force a collision -> gameover. */
   __forceCollision: () => void;
-  /** Deterministic hook: spawn a collectible friend (stub until ticket 02). */
+  /**
+   * Deterministic hook: spawn a collectible friend in Gary's lane, just ahead
+   * of him. No-op outside a run. Bypasses the spawn cadence and the RNG, but
+   * goes through the real field + collision path, and cycles the roster so
+   * repeated calls introduce different characters.
+   */
   __spawnFriend: () => void;
 }
 
@@ -133,6 +151,9 @@ export function installTestApi(
     },
     get nearMisses() {
       return hooks.nearMissCount();
+    },
+    get conga() {
+      return hooks.congaLength();
     },
     start() {
       store.start();

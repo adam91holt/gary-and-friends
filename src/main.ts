@@ -31,6 +31,7 @@ import { GameAudio } from './audio.ts';
 import { Run } from './game/gameplay/run.ts';
 import { GameStore } from './game/state.ts';
 import { createGary } from './scene/gary.ts';
+import { Friends } from './scene/friends.ts';
 import { laneToX, Road } from './scene/road.ts';
 import { Traffic } from './scene/traffic.ts';
 import { installTestApi, type GaryTestHooks } from './testApi.ts';
@@ -43,14 +44,22 @@ const audio = new GameAudio();
 // Feedback for threading a gap: a whoosh cue plus a short accent pulse the HUD
 // and the lighting both read. Set by the simulation, decayed by the loop.
 let nearMissFlash = 0;
+// Same idea for a pickup, but warmer and longer: collecting a friend is the
+// happiest thing in the game and should light the whole road for a moment.
+let friendFlash = 0;
 
-// The gameplay simulation (traffic, scoring, difficulty ramp, collision). Pure
-// logic — this file only ticks it and draws whatever it says.
+// The gameplay simulation (traffic, friends, scoring, difficulty, collision).
+// Pure logic — this file only ticks it and draws whatever it says.
 const run = new Run(store, {
   onNearMiss: () => {
     nearMissFlash = 1;
     audio.nearMiss();
     hud.pulse();
+  },
+  onFriend: (pickup) => {
+    friendFlash = 1;
+    audio.friend();
+    hud.collected(pickup);
   },
 });
 
@@ -73,13 +82,15 @@ const hooks: GaryTestHooks = {
   // Goes through the real collision predicate (Run.forceCollision injects a
   // vehicle onto Gary), so the e2e hook exercises collision, not just state.
   forceCollision: () => run.forceCollision(),
-  spawnFriend: () => {
-    /* ticket 03 wires real friend spawning here — add a second EntityField
-       beside run.traffic and inject into it; see src/game/entities/field.ts */
-  },
-  entityCount: () => run.traffic.activeCount,
+  // Injects a friend into Gary's lane and lets the normal collision path
+  // collect it, so the hook exercises the real pickup rule, not the store.
+  spawnFriend: () => run.spawnFriend(),
+  entityCount: () => run.traffic.activeCount + run.friends.activeCount,
   nearestAhead: () => {
     let nearest: { distance: number; lane: number } | null = null;
+    // Traffic only: this is the "what am I about to hit" readout tests steer
+    // by. A friend is something to aim FOR, so folding it in here would make
+    // the dodging bots swerve away from the reward.
     for (const e of run.traffic.entities) {
       if (!e.active || e.z > 0) continue;
       const distance = -e.z;
@@ -90,6 +101,7 @@ const hooks: GaryTestHooks = {
     return nearest;
   },
   nearMissCount: () => run.nearMisses,
+  congaLength: () => run.conga.length,
 };
 installTestApi(store, () => hasRenderedFrame, hooks);
 
@@ -125,6 +137,34 @@ const CHASE_RIG = {
   look: { x: 0, y: 1.1, z: -6 },
 } as const;
 
+/**
+ * Ceiling on how far the conga line is allowed to pull the chase camera back
+ * (world units of tail). Beyond this the road ahead would start to shrink
+ * faster than the tail grows, trading the thing you have to react to for the
+ * thing you already earned — a bad deal at any convoy length.
+ */
+const CONGA_FRAME_MAX = 6.5;
+
+/**
+ * How the convoy reframes the chase shot, per world unit of tail.
+ *
+ * The LIFT matters more than the pull-back, and that is the whole trick. From
+ * the default low chase pose you are looking straight down the line, so every
+ * cone hides behind the one in front and a six-friend convoy reads as one lumpy
+ * mass. Rising as it grows turns the same tail into a legible queue of distinct
+ * characters — which is the reward you actually earned. Pulling back alone just
+ * makes the pile smaller.
+ */
+const CONGA_LIFT = 0.28;
+/**
+ * Deliberately GREATER than 1: the tail grows toward the camera, so retreating
+ * one-for-one only ever holds the newest arrival exactly at the near clip of
+ * the frame — and the newest arrival is the one the player just earned and most
+ * wants to see. Over-retreating buys the margin that keeps them in shot.
+ */
+const CONGA_PULLBACK = 1.3;
+const CONGA_AIM_BACK = 0.75;
+
 camera.position.set(MENU_RIG.pos.x, MENU_RIG.pos.y, MENU_RIG.pos.z);
 camera.lookAt(MENU_RIG.look.x, MENU_RIG.look.y, MENU_RIG.look.z);
 
@@ -150,7 +190,8 @@ const KEY_LIGHT_BASE = 1.5;
 const key = new DirectionalLight(0xfff1e0, KEY_LIGHT_BASE);
 key.position.set(4, 8, 6);
 scene.add(key);
-const rim = new DirectionalLight(0x6688ff, 0.6);
+const RIM_LIGHT_BASE = 0.6;
+const rim = new DirectionalLight(0x6688ff, RIM_LIGHT_BASE);
 rim.position.set(-5, 4, -6);
 scene.add(rim);
 
@@ -179,6 +220,11 @@ scene.add(road.group);
 const traffic = new Traffic();
 scene.add(traffic.group);
 
+// The cast: collectible cones on the road plus the conga line behind Gary.
+// Both are placed straight from the simulation (run.friends / run.conga).
+const friends = new Friends();
+scene.add(friends.group);
+
 // Gary — stays at world z=0; the road scrolls past him. Lane drives his X.
 const gary = createGary();
 gary.position.set(laneToX(store.getState().lane), 0, 0);
@@ -197,6 +243,9 @@ store.subscribe((state) => {
       // state. Otherwise reset() would leave frozen traffic visible on the menu.
       run.reset();
       traffic.sync(run.traffic.entities);
+      // The conga line is simulation-owned too: reset() empties it, and this
+      // clears the meshes in the same frame so no ghost cones survive a restart.
+      friends.clear();
       gary.position.x = laneToX(state.lane);
       visualSpeed = 0;
       if (state.status === 'playing') audio.start();
@@ -258,17 +307,32 @@ window.addEventListener('keydown', (e) => {
 let lastTime = performance.now();
 let time = 0;
 
+/** Bound slow frames so traffic cannot jump an entire reaction window before
+ * input is observed. A modest catch-up allowance avoids severe time dilation
+ * under browser contention while preserving a dodgeable world at low FPS. */
+const MAX_FRAME_DT = 0.1;
+const SIMULATION_STEP = 0.05;
+
 function frame(now: number): void {
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  const dt = Math.min((now - lastTime) / 1000, MAX_FRAME_DT);
   lastTime = now;
   time += dt;
 
-  // Tick the simulation FIRST, so everything drawn this frame reflects the same
-  // instant: distance/score/speed ramp, traffic movement + spawning, collision.
-  // Gary's rendered X is fed back in so a hit matches the cone you can see.
-  run.setGaryX(gary.position.x);
-  run.update(dt);
+  // Catch the simulation up before drawing. Gary advances in the same small
+  // steps as traffic so a low-fps late dodge follows the path seen at 60fps
+  // instead of either teleporting clear or remaining frozen for a whole frame.
+  let remaining = dt;
+  while (remaining > 0) {
+    const step = Math.min(remaining, SIMULATION_STEP);
+    const targetX = laneToX(store.getState().lane);
+    gary.position.x = MathUtils.damp(gary.position.x, targetX, 12, step);
+    run.setGaryX(gary.position.x);
+    run.update(step);
+    remaining -= step;
+  }
   traffic.sync(run.traffic.entities);
+  friends.syncField(run.friends.entities, time, reducedMotion);
+  friends.syncConga(run.conga.members, time, reducedMotion);
 
   const s = store.getState();
   const menuFraming = s.status === 'menu';
@@ -283,10 +347,9 @@ function frame(now: number): void {
       );
   road.update(dt, visualSpeed);
 
-  // Gary eases toward his lane's X, banking into the move for some juice.
+  // Gary's X already advanced with the simulation substeps above; bank the
+  // rendered cone toward the remainder of that same lane change.
   const targetX = laneToX(s.lane);
-  const prevX = gary.position.x;
-  gary.position.x = MathUtils.damp(prevX, targetX, 9, dt);
   gary.rotation.z = MathUtils.damp(
     gary.rotation.z,
     (targetX - gary.position.x) * 0.5,
@@ -323,9 +386,25 @@ function frame(now: number): void {
   // Reduced motion: snap to the rig instead of sweeping the viewport.
   const camLambda = reducedMotion ? 1e3 : 3.2;
 
+  // The convoy earns its own framing: as the conga line grows, the chase rig
+  // eases back and up so the tail stays in shot instead of trailing off behind
+  // the camera. The reward literally changes the composition — the longer your
+  // line, the wider the shot, which is the whole fantasy made visible. Damped
+  // like every other rig move, so it reads as a slow pull-back, never a cut.
+  const tail = menuFraming ? 0 : Math.min(run.conga.tailLength, CONGA_FRAME_MAX);
   camera.position.x = MathUtils.damp(camera.position.x, camTargetX, camLambda, dt);
-  camera.position.y = MathUtils.damp(camera.position.y, rig.pos.y, camLambda, dt);
-  camera.position.z = MathUtils.damp(camera.position.z, rig.pos.z, camLambda, dt);
+  camera.position.y = MathUtils.damp(
+    camera.position.y,
+    rig.pos.y + tail * CONGA_LIFT,
+    camLambda,
+    dt,
+  );
+  camera.position.z = MathUtils.damp(
+    camera.position.z,
+    rig.pos.z + tail * CONGA_PULLBACK,
+    camLambda,
+    dt,
+  );
 
   if (!reducedMotion && shake > 0.001) {
     shake *= Math.exp(-6 * dt);
@@ -336,8 +415,25 @@ function frame(now: number): void {
   }
 
   lookAt.x = MathUtils.damp(lookAt.x, lookTargetX, camLambda, dt);
-  lookAt.y = MathUtils.damp(lookAt.y, rig.look.y, camLambda, dt);
-  lookAt.z = MathUtils.damp(lookAt.z, rig.look.z, camLambda, dt);
+  // As the camera rises for a long convoy, the aim drops with it: otherwise the
+  // extra height would just tilt the shot up into empty sky and push the tail
+  // off the bottom of the frame. Together they read as craning up over the line.
+  lookAt.y = MathUtils.damp(
+    lookAt.y,
+    rig.look.y - tail * CONGA_LIFT * 0.5,
+    camLambda,
+    dt,
+  );
+  // The aim point also drifts back toward Gary as the convoy grows. Raising and
+  // retreating the camera alone still aims 19 units up the road, which puts the
+  // near end of a long tail below the bottom of the frame — the friends closest
+  // to Gary, i.e. the ones that just joined, would be the ones you cannot see.
+  lookAt.z = MathUtils.damp(
+    lookAt.z,
+    rig.look.z + tail * CONGA_AIM_BACK,
+    camLambda,
+    dt,
+  );
   camera.lookAt(lookAt.x, lookAt.y, lookAt.z);
 
   // Cross-fade the hero light with the same easing as the rig move.
@@ -350,14 +446,25 @@ function frame(now: number): void {
 
   // Near miss: a brief warm bloom on the key light and a small camera kick, so
   // squeezing past a truck is felt in the scene and not only in the HUD.
+  // Pickup: a warmer, slower bloom than the near-miss kick, so collecting a
+  // friend feels like the road lighting up rather than a hazard whipping past.
+  if (friendFlash > 0.001) {
+    friendFlash *= Math.exp(-3.4 * dt);
+  } else {
+    friendFlash = 0;
+  }
+
   if (nearMissFlash > 0.001) {
     nearMissFlash *= Math.exp(-7 * dt);
-    key.intensity = KEY_LIGHT_BASE + nearMissFlash * 1.5;
     if (!reducedMotion) camera.position.y += nearMissFlash * 0.06;
   } else {
     nearMissFlash = 0;
-    key.intensity = KEY_LIGHT_BASE;
   }
+  key.intensity =
+    KEY_LIGHT_BASE + nearMissFlash * 1.5 + friendFlash * 1.1;
+  // The pickup also warms the rim light, so the whole convoy is momentarily
+  // outlined — the tail is what you just made bigger, so the tail should glow.
+  rim.intensity = RIM_LIGHT_BASE + friendFlash * 1.4;
 
   renderer.render(scene, camera);
 
