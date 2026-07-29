@@ -9,6 +9,10 @@
  * him, and the DOM HUD (ui/hud.ts). The store is never mutated from the loop —
  * only from explicit user intent (keyboard / HUD buttons) and the test hooks.
  */
+// Self-hosted variable display face. Bundled by Vite (no network/CDN at runtime)
+// so the type scale in index.html renders in its intended voice rather than
+// silently falling back to the system stack.
+import '@fontsource-variable/space-grotesk/wght.css';
 import {
   ACESFilmicToneMapping,
   AmbientLight,
@@ -34,6 +38,14 @@ const BG = 0x0e0e18;
 const IDLE_SPEED = 6;
 
 const store = new GameStore();
+
+// Honour the OS reduced-motion preference in the 3D layer too, not just CSS:
+// camera sweeps snap instead of easing, and Gary's idle bob is stilled.
+const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+let reducedMotion = reducedMotionQuery.matches;
+reducedMotionQuery.addEventListener('change', (e) => {
+  reducedMotion = e.matches;
+});
 
 // `ready` flips true after the first rendered frame. Tests wait on this.
 let hasRenderedFrame = false;
@@ -64,8 +76,33 @@ const camera = new PerspectiveCamera(
   0.1,
   400,
 );
-camera.position.set(0, 3, 7);
-camera.lookAt(0, 1.1, -6);
+
+/**
+ * Two camera rigs, eased between on state change (the one committed idea the
+ * whole screen is built around): the menu is a low front-quarter "hero" shot
+ * that frames Gary off to the right of the docked card — you meet the character
+ * before you play him — and starting a run swings the camera up and back into
+ * the over-the-shoulder chase pose. `start()` is therefore a camera move, not
+ * just a card swap.
+ */
+const MENU_RIG = {
+  pos: { x: -2.9, y: 1.35, z: 4.3 },
+  look: { x: 0.55, y: 0.95, z: -1.5 },
+} as const;
+const CHASE_RIG = {
+  pos: { x: 0, y: 3, z: 7 },
+  look: { x: 0, y: 1.1, z: -6 },
+} as const;
+
+camera.position.set(MENU_RIG.pos.x, MENU_RIG.pos.y, MENU_RIG.pos.z);
+camera.lookAt(MENU_RIG.look.x, MENU_RIG.look.y, MENU_RIG.look.z);
+
+/** Where the camera currently aims; damped toward the active rig's target. */
+const lookAt: { x: number; y: number; z: number } = {
+  x: MENU_RIG.look.x,
+  y: MENU_RIG.look.y,
+  z: MENU_RIG.look.z,
+};
 
 const renderer = new WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -84,6 +121,14 @@ scene.add(key);
 const rim = new DirectionalLight(0x6688ff, 0.6);
 rim.position.set(-5, 4, -6);
 scene.add(rim);
+
+// Menu-only hero light, from the front-left where the hero camera sits, so Gary
+// is modelled and lit in his portrait. Its intensity is cross-faded with the
+// camera rig in the loop, so it never flattens the in-play road lighting.
+const HERO_LIGHT_MAX = 1.5;
+const heroLight = new DirectionalLight(0xffd9a8, HERO_LIGHT_MAX);
+heroLight.position.set(-4, 3, 5);
+scene.add(heroLight);
 
 // Dark ground beyond the road so the horizon reads solid under the fog.
 const ground = new Mesh(
@@ -150,7 +195,9 @@ function frame(now: number): void {
   time += dt;
 
   const s = store.getState();
-  const effectiveSpeed = s.status === 'menu' ? IDLE_SPEED : s.speed;
+  // The menu gets its own framing (hero shot) and a gentle idle road drift.
+  const menuFraming = s.status === 'menu';
+  const effectiveSpeed = menuFraming ? IDLE_SPEED : s.speed;
 
   // Award distance-based score while playing (renderer signals intent; the
   // store owns the number). Simple integer trickle; ticket 02 refines scoring.
@@ -175,12 +222,44 @@ function frame(now: number): void {
     9,
     dt,
   );
-  // Idle bob so he feels alive even on the menu.
-  gary.position.y = Math.sin(time * 2.4) * 0.04;
+  // Idle bob so he feels alive even on the menu (stilled for reduced motion).
+  gary.position.y = reducedMotion ? 0 : Math.sin(time * 2.4) * 0.04;
+  // On the menu he turns to face the hero camera; in play he squares up to the
+  // road ahead. Same damped-transition idea as the camera rigs.
+  gary.rotation.y = MathUtils.damp(
+    gary.rotation.y,
+    menuFraming ? -0.42 : 0,
+    reducedMotion ? 1e3 : 3.2,
+    dt,
+  );
 
-  // Chase camera eases behind Gary and looks a little further down his lane.
-  camera.position.x = MathUtils.damp(camera.position.x, targetX * 0.55, 5, dt);
-  camera.lookAt(gary.position.x * 0.4, 1.1, -6);
+  // Camera: pick the rig for the current state, then damp position AND aim
+  // toward it. On the menu that's the hero shot; playing/gameover is the chase
+  // pose tracking Gary's lane. Because both are damped, `start()` reads as a
+  // continuous camera move rather than a cut.
+  const rig = menuFraming ? MENU_RIG : CHASE_RIG;
+  // Lane tracking only applies to the chase rig; the hero shot stays composed.
+  const camTargetX = menuFraming ? rig.pos.x : rig.pos.x + targetX * 0.55;
+  const lookTargetX = menuFraming ? rig.look.x : gary.position.x * 0.4;
+  // Reduced motion: snap to the rig instead of sweeping the viewport.
+  const camLambda = reducedMotion ? 1e3 : 3.2;
+
+  camera.position.x = MathUtils.damp(camera.position.x, camTargetX, camLambda, dt);
+  camera.position.y = MathUtils.damp(camera.position.y, rig.pos.y, camLambda, dt);
+  camera.position.z = MathUtils.damp(camera.position.z, rig.pos.z, camLambda, dt);
+
+  lookAt.x = MathUtils.damp(lookAt.x, lookTargetX, camLambda, dt);
+  lookAt.y = MathUtils.damp(lookAt.y, rig.look.y, camLambda, dt);
+  lookAt.z = MathUtils.damp(lookAt.z, rig.look.z, camLambda, dt);
+  camera.lookAt(lookAt.x, lookAt.y, lookAt.z);
+
+  // Cross-fade the hero light with the same easing as the rig move.
+  heroLight.intensity = MathUtils.damp(
+    heroLight.intensity,
+    menuFraming ? HERO_LIGHT_MAX : 0,
+    camLambda,
+    dt,
+  );
 
   renderer.render(scene, camera);
 

@@ -88,8 +88,8 @@ friend-spawning lands (ticket 02).
   `setSpeed`, `gameOver`, `reset`. Test: `src/game/state.test.ts`.
 - **Test API (the bridge):** `src/testApi.ts` — projects `GameStore` onto
   `window.__GARY__` (getters) and exposes the deterministic `__`-hooks.
-- **Rendering (three.js, browser-only):** `src/main.ts` (scene, fog, chase
-  camera, animation loop), `src/scene/gary.ts` (procedural googly-eyed cone) and
+- **Rendering (three.js, browser-only):** `src/main.ts` (scene, fog, the two
+  camera rigs + animation loop), `src/scene/gary.ts` (procedural googly-eyed cone) and
   `src/scene/road.ts` (`Road`: 3-lane highway with recycled dash/barrier/light
   props scrolled by `speed`). This side *reads* the store and never owns state.
 - **DOM overlay:** `src/ui/hud.ts` — menu / telemetry HUD / game-over card and
@@ -98,6 +98,27 @@ friend-spawning lands (ticket 02).
 
 Keeping state out of the renderer is what makes the game testable both fast
 (Vitest on `GameStore`) and for real (Playwright via `__GARY__`).
+
+## Presentation notes (for anyone extending the visuals)
+
+- **Two camera rigs, one committed idea.** `MENU_RIG` is a low front-quarter
+  hero shot that frames Gary beside the docked menu card — you meet the
+  character before you play him. `CHASE_RIG` is the over-the-shoulder driving
+  pose that tracks his lane. Both position *and* aim are damped every frame, so
+  `start()` reads as a continuous camera move rather than a cut, and a menu-only
+  hero light cross-fades out on the same easing. Add new framings as rigs here
+  rather than mutating the camera ad hoc.
+- **Reduced motion is honoured in 3D, not just CSS.** `prefers-reduced-motion`
+  snaps the rig transition and stills Gary's idle bob (`reducedMotion` in
+  `main.ts`), matching the media query in `hud.ts`.
+- **Design tokens live in `index.html` `:root`** — dark surfaces, the single
+  owned `--accent` (Gary orange, also reused by the road's edge lines and lamp
+  glow), and the type scale. Never hard-code a hex in a component.
+- **The display face is self-hosted**, not merely named:
+  `@fontsource-variable/space-grotesk` is imported in `main.ts` so Vite bundles
+  it (no CDN at runtime) and `--font-display` actually renders in its intended
+  voice. `tsconfig.app.json` includes `vite/client` types so the CSS
+  side-effect import type-checks under `noUncheckedSideEffectImports`.
 
 ## Getting started
 

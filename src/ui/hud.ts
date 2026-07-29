@@ -65,6 +65,24 @@ const CSS = `
   position: absolute; inset: 0;
   background: radial-gradient(ellipse at 50% 55%, rgba(14,14,24,0.05), rgba(10,10,18,0.72) 78%);
 }
+/* The menu is a composed shot: card docked left, Gary posing on the right. Its
+   scrim is weighted to the left so it darkens behind the type without dimming
+   him. Below ~900px there's no room beside the card, so it re-centres and the
+   scrim goes symmetric (the 3D rig keeps him visible under the card's offset). */
+#hud .screen.menu { place-items: center start; }
+#hud .screen.menu .card { margin-left: clamp(24px, 7vw, 104px); text-align: left; }
+#hud .screen.menu .scrim {
+  background: linear-gradient(100deg, rgba(10,10,18,0.9) 30%, rgba(10,10,18,0.34) 62%, rgba(10,10,18,0.62));
+}
+#hud .screen.menu .legend { justify-content: flex-start; }
+@media (max-width: 900px) {
+  #hud .screen.menu { place-items: center; }
+  #hud .screen.menu .card { margin-left: 0; text-align: center; }
+  #hud .screen.menu .scrim {
+    background: radial-gradient(ellipse at 50% 55%, rgba(14,14,24,0.15), rgba(10,10,18,0.8) 78%);
+  }
+  #hud .screen.menu .legend { justify-content: center; }
+}
 /* Cards ride above centre so the road keeps running underneath them. */
 #hud .card {
   position: relative;
@@ -193,10 +211,17 @@ const CSS = `
 #hud .skeleton .sk-bar { position: absolute; top: 18px; left: 0; right: 0; display: flex; gap: 12px; justify-content: center; }
 #hud .skeleton .sk-pill { width: 116px; height: 62px; }
 #hud .skeleton .sk-pill.wide { width: 148px; }
-/* Matches the real card's footprint AND its offset, so nothing jumps on load. */
+/* Matches the real menu card's footprint, offset AND left dock, so the card
+   doesn't jump across the screen when the first frame lands. */
 #hud .skeleton .sk-card {
   width: min(90vw, 460px); height: 300px; border-radius: 20px;
   margin-bottom: 12vh;
+}
+#hud .skeleton .sk-stage { display: grid; place-items: center start; }
+#hud .skeleton .sk-card { margin-left: clamp(24px, 7vw, 104px); }
+@media (max-width: 900px) {
+  #hud .skeleton .sk-stage { place-items: center; }
+  #hud .skeleton .sk-card { margin-left: 0; }
 }
 
 /* Reduced-motion: kill transforms/shimmer, keep opacity legible. */
@@ -307,7 +332,7 @@ export class Hud {
             <div class="sk sk-pill"></div>
             <div class="sk sk-pill wide"></div>
           </div>
-          <div style="position:absolute;inset:0;display:grid;place-items:center;">
+          <div class="sk-stage" style="position:absolute;inset:0;">
             <div class="sk sk-card"></div>
           </div>
         </div>

@@ -5,6 +5,9 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
+    /* Vite ambient types: declares CSS/asset side-effect imports (required by
+       noUncheckedSideEffectImports). Not a strictness relaxation. */
+    "types": ["vite/client"],
 
     /* Bundler mode */
     "moduleResolution": "bundler",
