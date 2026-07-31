@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
     <title>Gary and his Friends</title>
     <style>
       /* ── Design tokens ─────────────────────────────────────────────────
@@ -94,6 +97,11 @@
       }
       canvas {
         display: block;
+        /* The canvas owns every in-game gesture: swipes drive lane changes
+           (see src/main.ts), so the browser must not claim them for scroll,
+           pinch-zoom or double-tap-zoom. This also drops the legacy 300ms tap
+           delay on touch, keeping start/restart taps instant. */
+        touch-action: none;
       }
       /* HUD overlay is injected by src/ui/hud.ts and sits above the canvas. */
       #hud {

@@ -384,37 +384,136 @@ function onResize(): void {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 window.addEventListener('resize', onResize);
+// iOS Safari shrinks/grows the layout viewport when the URL bar slides away and
+// on orientation flips. `resize` covers most of it, but the visualViewport and
+// orientationchange events are the reliable signals on iOS, so mirror onResize
+// onto them too — otherwise the canvas can end up letterboxed or overscrolled.
+window.visualViewport?.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', onResize);
 
 // ── Input: explicit user intent only (never the loop) ───────────────────────
-window.addEventListener('keydown', (e) => {
+// Both input devices funnel through these two intents so touch never forks the
+// game logic — a swipe is a keypress by another name.
+
+/** Move Gary one lane in `delta` (-1 left / +1 right). The store clamps range. */
+function changeLane(delta: number): void {
   const { status, lane } = store.getState();
+  if (status === 'playing') audio.unlock();
+  store.setLane(lane + delta);
+}
+
+/** The Space/Enter/tap intent: begin or restart a run, but never mid-play. */
+function startRun(): void {
+  if (store.getState().status !== 'playing') {
+    audio.unlock();
+    store.start();
+  }
+}
+
+window.addEventListener('keydown', (e) => {
   switch (e.key) {
     case 'ArrowLeft':
     case 'a':
     case 'A':
-      if (status === 'playing') audio.unlock();
-      store.setLane(lane - 1);
+      changeLane(-1);
       e.preventDefault();
       break;
     case 'ArrowRight':
     case 'd':
     case 'D':
-      if (status === 'playing') audio.unlock();
-      store.setLane(lane + 1);
+      changeLane(1);
       e.preventDefault();
       break;
     case ' ':
     case 'Enter':
-      if (status !== 'playing') {
-        audio.unlock();
-        store.start();
-      }
+      startRun();
       e.preventDefault();
       break;
     default:
       break;
   }
 });
+
+// ── Touch: iPhone / iPad. Swipe left/right = lane change, tap = start/restart ─
+// Handlers sit on the canvas (the play area). The HUD overlay is
+// pointer-events:none except its own buttons, so a touch anywhere that isn't a
+// button falls through to here, while the mute/start buttons keep their taps.
+// touch-action:none on the canvas (see index.html) stops the browser hijacking
+// these gestures for scroll/zoom, so we never need preventDefault — the
+// listeners stay passive.
+const SWIPE_THRESHOLD = 34; // px of horizontal travel that commits a lane change
+const TAP_SLOP = 10; // px of travel under which a gesture still counts as a tap
+
+let touchId: number | null = null;
+let touchStartX = 0;
+let touchStartY = 0;
+let touchMoved = false; // travelled past TAP_SLOP -> it's a swipe, not a tap
+let laneSwiped = false; // a lane change already fired this gesture
+
+function trackedTouch(list: TouchList): Touch | null {
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].identifier === touchId) return list[i];
+  }
+  return null;
+}
+
+const canvas = renderer.domElement;
+
+canvas.addEventListener(
+  'touchstart',
+  (e) => {
+    if (touchId !== null) return; // already tracking a finger; ignore extras
+    const t = e.changedTouches[0];
+    touchId = t.identifier;
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+    touchMoved = false;
+    laneSwiped = false;
+  },
+  { passive: true },
+);
+
+canvas.addEventListener(
+  'touchmove',
+  (e) => {
+    if (touchId === null) return;
+    const t = trackedTouch(e.changedTouches);
+    if (!t) return;
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    if (Math.abs(dx) > TAP_SLOP || Math.abs(dy) > TAP_SLOP) touchMoved = true;
+    // One lane change per gesture, and only when the motion is dominantly
+    // horizontal, so a vertical scroll-style drag never nudges Gary sideways.
+    if (
+      !laneSwiped &&
+      Math.abs(dx) >= SWIPE_THRESHOLD &&
+      Math.abs(dx) > Math.abs(dy)
+    ) {
+      changeLane(Math.sign(dx));
+      laneSwiped = true;
+    }
+  },
+  { passive: true },
+);
+
+function endTouch(e: TouchEvent): void {
+  if (touchId === null) return;
+  const t = trackedTouch(e.changedTouches);
+  if (!t) return;
+  // A tap (no meaningful travel, no lane swipe) is the Space/Enter intent:
+  // start on the menu, restart on game-over, nothing mid-run.
+  if (!touchMoved && !laneSwiped) startRun();
+  touchId = null;
+}
+
+canvas.addEventListener('touchend', endTouch, { passive: true });
+canvas.addEventListener(
+  'touchcancel',
+  () => {
+    touchId = null;
+  },
+  { passive: true },
+);
 
 // ── Render loop ─────────────────────────────────────────────────────────────
 let lastTime = performance.now();
