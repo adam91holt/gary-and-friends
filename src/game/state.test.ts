@@ -171,6 +171,16 @@ describe('GameStore', () => {
     expect(store.getState().status).toBe('playing');
   });
 
+  it('keeps highway-only telemetry idle for non-highway runs', () => {
+    const store = new GameStore();
+    store.selectGame('tower');
+    store.start();
+
+    expect(store.getState().lane).toBe(CENTER_LANE);
+    expect(store.getState().speed).toBe(0);
+    expect(store.getState().friends).toBe(0);
+  });
+
   it('restart from gameover replays the same game', () => {
     const store = new GameStore();
     store.selectGame('coneball');

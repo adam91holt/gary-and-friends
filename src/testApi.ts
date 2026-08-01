@@ -40,7 +40,11 @@
  * its runtime; the signature here is generic over that map, so a new command is
  * type-checked at the call site with no shared-file edit.
  */
-import { GAME_IDS } from './game/arcade/contracts.ts';
+import {
+  GAME_IDS,
+  isArcadeAction,
+  isGameId,
+} from './game/arcade/contracts.ts';
 import type {
   ArcadeAction,
   ArcadeCommandMap,
@@ -52,6 +56,8 @@ import type { GameStatus, GameStore } from './game/state.ts';
 
 /** Concrete implementations wired in by the renderer (src/main.ts). */
 export interface GaryTestHooks {
+  /** Launch/restart through the same catalog guard used by the shipping UI. */
+  start: () => void;
   /** Move Gary to lane n (clamped to the valid range by the store). */
   setLane: (n: number) => void;
   /** Force a collision -> gameover, deterministically. */
@@ -289,12 +295,19 @@ export function installTestApi(
       return hooks.highScores();
     },
     start() {
-      store.start();
+      hooks.start();
     },
     selectGame(id: GameId) {
+      // TypeScript callers are narrowed already, but window APIs are also called
+      // from plain JavaScript and Playwright. Reject untrusted values before a
+      // subscriber can observe an impossible selectedGame.
+      if (!isGameId(id)) throw new TypeError(`Unknown arcade game: ${String(id)}`);
       hooks.selectGame(id);
     },
     input(action: ArcadeAction) {
+      if (!isArcadeAction(action)) {
+        throw new TypeError(`Unknown arcade action: ${String(action)}`);
+      }
       hooks.input(action);
     },
     backToMenu() {

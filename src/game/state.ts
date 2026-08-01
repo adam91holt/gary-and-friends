@@ -82,7 +82,10 @@ function freshRun(selectedGame: GameId): GameState {
     status: 'playing',
     score: 0,
     lane: CENTER_LANE,
-    speed: BASE_SPEED,
+    // lane/speed/friends are the highway's legacy telemetry. Other runtimes keep
+    // those fields at their documented idle values and expose their own motion
+    // through ArcadeSnapshot instead.
+    speed: selectedGame === DEFAULT_GAME ? BASE_SPEED : 0,
     friends: 0,
     selectedGame,
   };
@@ -116,9 +119,10 @@ export class GameStore {
   }
 
   /**
-   * menu | gameover -> playing, from a clean run (score/friends reset, Gary
-   * re-centred, speed back to BASE_SPEED). This is also the "restart" path from
-   * gameover. No-op if already playing.
+   * menu | gameover -> playing, from a clean run (score/friends reset and Gary
+   * re-centred). Highway starts at BASE_SPEED; other games retain the legacy
+   * telemetry's idle speed of 0. This is also the restart path from gameover.
+   * No-op if already playing.
    */
   start(): void {
     if (this.state.status === 'playing') return;

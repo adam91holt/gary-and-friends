@@ -229,6 +229,7 @@ hud.setSnapshot(active().snapshot());
 // Names/signatures are pinned in testApi.ts; the concrete behaviour lives here.
 // Every one goes through real game logic, never through store poking.
 const hooks: GaryTestHooks = {
+  start: () => launch(store.getState().selectedGame),
   setLane: (n) => store.setLane(n),
   // Goes through the real collision predicate (Run.forceCollision injects a
   // vehicle onto Gary), so the e2e hook exercises collision, not just state.

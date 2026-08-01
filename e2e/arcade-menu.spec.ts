@@ -171,6 +171,24 @@ test('a keyboard-only player can open a placeholder slot and come back', async (
   // must not fabricate a run for a game that does not exist yet.
   expect(await page.evaluate(() => window.__GARY__?.game)).toBe('coneball');
   expect(await page.evaluate(() => window.__GARY__?.state)).toBe('menu');
+
+  // The additive legacy API must use that same launch guard; it cannot create a
+  // placeholder run that the shipping controls refuse to create.
+  await page.evaluate(() => window.__GARY__?.start());
+  expect(await page.evaluate(() => window.__GARY__?.state)).toBe('menu');
+
+  // JavaScript callers are not protected by the TypeScript GameId union. Junk is
+  // rejected before it reaches the store, leaving the valid selection intact.
+  const invalidSelection = await page.evaluate(() => {
+    try {
+      window.__GARY__?.selectGame('pinball' as never);
+      return { threw: false, game: window.__GARY__?.game };
+    } catch {
+      return { threw: true, game: window.__GARY__?.game };
+    }
+  });
+  expect(invalidSelection).toEqual({ threw: true, game: 'coneball' });
+
   await expect(page.locator('#startBtn')).toHaveAttribute(
     'aria-disabled',
     'true',
