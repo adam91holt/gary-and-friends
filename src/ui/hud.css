@@ -1,0 +1,860 @@
+/* ── The arcade overlay ─────────────────────────────────────────────────────
+   Component styles for the DOM overlay. Design TOKENS (colour, type scale, the
+   hazard motif, easing) live in index.html :root — nothing in this file may
+   declare a raw hex or re-declare a stripe. Read the token.
+
+   The committed idea, extended from the runner to the whole cabinet: every
+   surface is a piece of hazard-taped roadside machinery. Cards are instrument
+   bezels capped with the diagonal cone stripe, telemetry is mono numerals in
+   lit slots, and the game you have selected is playing LIVE in 3D behind the
+   panel — the select screen is a window onto the running cabinet, not a
+   catalogue page in front of it. */
+
+#hud * { box-sizing: border-box; margin: 0; }
+#hud button { font-family: inherit; }
+
+/* Screen containers cross-fade on state change. */
+#hud .screen {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  opacity: 0; transform: scale(0.985);
+  transition: opacity 0.35s var(--ease), transform 0.35s var(--ease);
+  pointer-events: none;
+}
+#hud[data-screen="loading"] .screen.loading,
+#hud[data-screen="menu"] .screen.menu,
+#hud[data-screen="gameover"] .screen.gameover {
+  opacity: 1; transform: none; pointer-events: auto;
+}
+/* The playbar is not a modal screen — it lives at the top edge while playing. */
+#hud .playbar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; gap: 12px; justify-content: center;
+  padding: 18px 20px;
+  opacity: 0; transform: translateY(-14px);
+  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
+  pointer-events: none;
+}
+#hud[data-screen="playing"] .playbar { opacity: 1; transform: none; }
+
+/* Modal cards sit over a vignette that lets the game show through. */
+#hud .scrim {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 55%, rgba(14,14,24,0.05), rgba(10,10,18,0.72) 78%);
+}
+/* Both composed screens are the same shot: panel docked left, the game on the
+   right. The menu meets Gary standing proud; game-over leaves him flat on his
+   back in the SAME frame, which is the joke — the composition is the setup, the
+   squashed cone is the punchline. Their scrims are weighted left so they darken
+   behind the type without dimming him. Below ~1000px there is no room beside
+   the panel, so they re-centre and the scrim goes symmetric (the 3D rigs keep
+   him visible under the panel's offset). */
+#hud .screen.menu,
+#hud .screen.gameover { place-items: center start; }
+#hud .screen.menu .cabinet,
+#hud .screen.gameover .card { margin-left: clamp(20px, 5vw, 88px); text-align: left; }
+#hud .screen.gameover .best { margin-left: 0; margin-right: auto; }
+#hud .screen.menu .scrim,
+#hud .screen.gameover .scrim {
+  background: linear-gradient(100deg, rgba(10,10,18,0.9) 30%, rgba(10,10,18,0.34) 62%, rgba(10,10,18,0.62));
+}
+#hud .screen.gameover .legend { justify-content: flex-start; }
+#hud .screen.gameover .stats,
+#hud .screen.gameover .convoy { justify-content: flex-start; }
+#hud .screen.gameover .crash { place-items: start; }
+@media (max-width: 1000px) {
+  #hud .screen.menu,
+  #hud .screen.gameover { place-items: center; }
+  #hud .screen.menu .cabinet,
+  #hud .screen.gameover .card { margin-left: 0; }
+  #hud .screen.gameover .card { text-align: center; }
+  #hud .screen.gameover .best { margin-left: auto; }
+  #hud .screen.menu .scrim,
+  #hud .screen.gameover .scrim {
+    background: radial-gradient(ellipse at 50% 55%, rgba(14,14,24,0.15), rgba(10,10,18,0.8) 78%);
+  }
+  #hud .screen.gameover .legend { justify-content: center; }
+  #hud .screen.gameover .stats,
+  #hud .screen.gameover .convoy { justify-content: center; }
+  #hud .screen.gameover .crash { place-items: center; }
+}
+/* Cards ride above centre so the game keeps running underneath them. */
+#hud .card {
+  position: relative;
+  margin-bottom: 12vh;
+  text-align: center;
+  padding: 40px 44px;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5), inset 0 1px 0 var(--hairline-strong);
+  max-width: min(90vw, 460px);
+  overflow: hidden;
+}
+/* Every card is capped with the hazard band — the motif that ties the DOM
+   overlay to the cone on the road. Token-owned (--hazard); components never
+   re-declare the stripe. */
+#hud .card::before {
+  content: "";
+  position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: var(--hazard);
+  opacity: 0.92;
+}
+
+/* Type: eyebrow / hero / title / tagline. */
+#hud .eyebrow {
+  font-size: var(--fs-label); font-weight: 600;
+  letter-spacing: 0.34em; text-transform: uppercase;
+  color: var(--accent);
+}
+#hud .hero {
+  font-size: var(--fs-hero); font-weight: 700; line-height: 0.94;
+  letter-spacing: -0.02em; margin: 14px 0 0;
+}
+#hud .hero .amp {
+  display: block;
+  font-size: 0.3em; font-weight: 600; letter-spacing: 0.22em;
+  color: var(--accent-2); margin: 6px 0 2px;
+}
+#hud .title {
+  font-size: var(--fs-title); font-weight: 700; letter-spacing: -0.02em;
+  line-height: 1.05; margin-top: 8px;
+}
+#hud .tagline {
+  font-size: var(--fs-body); color: var(--text-dim);
+  margin-top: 12px; line-height: 1.5;
+}
+
+/* Primary button. */
+#hud .btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin-top: 26px; padding: 14px 26px;
+  font-size: 0.95rem; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border: none; border-radius: 12px; cursor: pointer;
+  box-shadow: 0 10px 24px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.35);
+  transition: transform 0.12s var(--ease), box-shadow 0.2s var(--ease), filter 0.2s var(--ease);
+}
+#hud .btn svg { width: 18px; height: 18px; }
+#hud .btn:hover { transform: translateY(-2px); box-shadow: 0 16px 34px var(--accent-glow); filter: brightness(1.06); }
+#hud .btn:active { transform: translateY(0) scale(0.97); }
+#hud .btn:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 3px; }
+/* A slot that isn't built yet says so, plainly, instead of offering a run it
+   cannot deliver. Still focusable — a disabled control you cannot reach is a
+   dead end a keyboard player has no way to understand. */
+#hud .btn[aria-disabled="true"] {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-faint);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  cursor: not-allowed;
+}
+#hud .btn[aria-disabled="true"]:hover { transform: none; filter: none; box-shadow: inset 0 0 0 1px var(--hairline); }
+
+/* Controls legend. */
+#hud .legend {
+  display: flex; gap: 18px; justify-content: center; flex-wrap: wrap;
+  margin-top: 22px; color: var(--text-faint);
+  font-size: var(--fs-label); letter-spacing: 0.1em; text-transform: uppercase;
+}
+#hud .legend b { color: var(--text-dim); font-weight: 700; }
+#hud .play-hint {
+  align-self: center; padding: 8px 11px; border-radius: 10px;
+  color: var(--text-faint); background: var(--surface-hud);
+  border: 1px solid var(--hairline); backdrop-filter: blur(10px);
+  font-size: var(--fs-label); letter-spacing: 0.08em; text-transform: uppercase;
+}
+#hud .play-hint b { color: var(--accent-2); }
+
+/* ── The cabinet: masthead + game grid + selection footer ───────────────────
+   Deliberately DENSE. This is a scanning-and-comparing surface — four games,
+   each with art, a cast, a control scheme and a record — so it is laid out like
+   a machine faceplate, not like a marketing page with air between the rows. */
+#hud .cabinet {
+  position: relative;
+  display: flex; flex-direction: column;
+  gap: 18px;
+  width: min(92vw, 660px);
+  max-height: 92vh;
+  padding: 22px 24px 20px;
+  border-radius: 22px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 28px 70px rgba(0,0,0,0.55), inset 0 1px 0 var(--hairline-strong);
+  overflow: hidden;
+}
+#hud .cabinet::before {
+  content: "";
+  position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: var(--hazard);
+  opacity: 0.92;
+}
+/* The masthead steps DOWN from the old single-card hero: the title is no longer
+   the only thing on the screen, and four game cards below it are what the
+   player actually came to read. It also sets its name on ONE line — stacking
+   "GARY / AND HIS / FRIENDS" cost three rows of a panel that has four cards to
+   fit, so the connective runs inline at label weight instead. */
+#hud .masthead { padding-top: 4px; }
+#hud .screen.menu .hero {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.34em;
+  font-size: var(--fs-masthead); margin-top: 8px;
+}
+#hud .screen.menu .hero .amp {
+  display: inline; font-size: 0.34em; margin: 0;
+}
+#hud .masthead .tagline { margin-top: 6px; font-size: 0.84rem; }
+
+/* ── The game grid ─────────────────────────────────────────────────────────
+   A real 2×2 layout grid of real <button>s (WAI-ARIA layout-grid semantics with
+   a roving tabindex — never role="menu", which would promise a menubar's
+   keyboard contract we don't implement). */
+#hud .grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  overflow-y: auto;
+  /* Keep the focus ring from being clipped by the scroll container. */
+  padding: 3px;
+  margin: -3px;
+}
+#hud .grid > [role="row"] { display: contents; }
+#hud .grid > [role="row"] > [role="gridcell"] { display: flex; min-width: 0; }
+
+#hud .gcard {
+  position: relative; overflow: hidden;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px 10px 10px;
+  text-align: left;
+  color: var(--text);
+  background: rgba(255,255,255,0.028);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.22s var(--ease), border-color 0.22s var(--ease),
+    transform 0.14s var(--ease), box-shadow 0.22s var(--ease);
+}
+#hud .gcard:hover { background: rgba(255,255,255,0.06); border-color: var(--hairline-strong); transform: translateY(-2px); }
+#hud .gcard:active { transform: translateY(0) scale(0.99); }
+#hud .gcard:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 2px; }
+/* The selected card is LIT: its hazard rail goes full strength and the accent
+   wash fills it, because that game is the one actually running behind the
+   panel. Selection is a state you can see from across the room. */
+#hud .gcard[aria-current="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent-glow);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4), inset 0 1px 0 var(--hairline-strong);
+}
+#hud .gcard::before {
+  content: "";
+  position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--hazard-dim);
+  transition: background 0.22s var(--ease);
+}
+#hud .gcard[aria-current="true"]::before { background: var(--hazard); }
+
+/* Preview plate: the art, in a fixed 8:5 window so four cards align. */
+#hud .gcard .shot {
+  position: relative; overflow: hidden;
+  aspect-ratio: 8 / 5;
+  border-radius: 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline);
+}
+#hud .gcard .shot img {
+  display: block; width: 100%; height: 100%; object-fit: cover;
+  opacity: 0.82;
+  transition: opacity 0.22s var(--ease), transform 0.3s var(--ease);
+}
+#hud .gcard:hover .shot img,
+#hud .gcard[aria-current="true"] .shot img { opacity: 1; }
+#hud .gcard[aria-current="true"] .shot img { transform: scale(1.04); }
+/* A slot without a game yet is marked on the art itself, so the promise is
+   never made and then withdrawn at the CTA. */
+#hud .gcard .soon {
+  position: absolute; left: 5px; bottom: 5px;
+  padding: 2px 6px; border-radius: 999px;
+  font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--accent-ink); background: var(--accent-2);
+}
+
+#hud .gcard .body { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+#hud .gcard .gname {
+  font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15;
+}
+#hud .gcard[aria-current="true"] .gname { color: var(--accent-2); }
+#hud .gcard .gdesc {
+  font-size: 0.74rem; line-height: 1.4; color: var(--text-dim);
+  /* Two lines, then ellipsis: four cards must stay the same height or the grid
+     stops reading as a grid. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  line-clamp: 2; overflow: hidden;
+}
+/* The cast rail: who is in this one, as tinted cone glyphs. Same manifest idea
+   as the in-play convoy rail, at card scale. */
+#hud .gcard .cast { display: flex; align-items: center; gap: 3px; }
+#hud .gcard .cast svg { width: 13px; height: 13px; color: var(--tint); }
+#hud .gcard .cast .gary { color: var(--accent); }
+#hud .gcard .foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: auto; padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+#hud .gcard .keys {
+  font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text-faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#hud .gcard .keys b { color: var(--text-dim); font-weight: 700; }
+/* Each card carries its own record — comparing your bests across the cabinet is
+   the reason the grid is dense rather than a list of names. */
+#hud .gcard .gbest {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint);
+  white-space: nowrap;
+}
+#hud .gcard .gbest .n {
+  font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: 0;
+  font-variant-numeric: tabular-nums; color: var(--text-dim);
+}
+#hud .gcard[aria-current="true"] .gbest .n { color: var(--accent); }
+
+/* The footer: what you have selected, and the one control that launches it. */
+#hud .launch {
+  display: flex; align-items: center; gap: 14px;
+  padding-top: 14px; border-top: 1px solid var(--hairline);
+}
+#hud .launch .btn { margin-top: 0; flex-shrink: 0; }
+#hud .launch .meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+#hud .launch .k {
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .launch .picked {
+  font-size: 1.02rem; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--accent-2);
+}
+/* The full control scheme for the selected game. Tighter gaps than the modal
+   legend so three hints sit on one line instead of orphaning the last one. */
+#hud .launch .legend {
+  margin-top: 3px; justify-content: flex-start;
+  gap: 4px 12px; font-size: var(--fs-micro); letter-spacing: 0.08em;
+}
+/* The record for the selected game, docked to the far end of the strip: it
+   changes as you walk the grid, which is what makes the strip a readout rather
+   than a caption. */
+#hud .launch .best { margin: 0 0 0 auto; flex-shrink: 0; }
+
+@media (max-width: 560px) {
+  #hud .cabinet { width: 94vw; padding: 18px 16px 16px; gap: 14px; }
+  #hud .grid { grid-template-columns: minmax(0, 1fr); }
+  #hud .gcard { grid-template-columns: 78px minmax(0, 1fr); }
+  #hud .launch { flex-direction: column; align-items: stretch; }
+}
+
+/* Telemetry readouts (instrument-dense). Each carries a slim hazard rail down
+   its left edge — the same token the cards are capped with, at instrument
+   scale, so the bar reads as part of one striped machine. */
+#hud .readout {
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px 10px 16px; min-width: 116px;
+  background: var(--surface-hud); border: 1px solid var(--hairline);
+  border-radius: 12px; backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 var(--hairline-strong);
+}
+#hud .readout::before {
+  content: "";
+  position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--hazard-dim);
+}
+/* The live best: dimmer than the run's own numbers, because it is context, not
+   telemetry — until you pass it, at which point it becomes the loudest thing
+   in the bar. With no record yet there is nothing to chase, so the slot is not
+   drawn at all — an instrument reading zero forever is worse than no
+   instrument, and the bar recomposes around three readouts perfectly well. */
+#hud .readout.best-ro { min-width: 104px; }
+#hud .readout.best-ro.empty { display: none; }
+#hud .readout.best-ro .val { font-size: 1.3rem; color: var(--text-dim); }
+#hud .readout.best-ro .ic { color: var(--text-faint); }
+#hud .readout.best-ro.beaten .val { color: var(--accent); }
+#hud .readout.best-ro.beaten .ic { color: var(--accent); }
+#hud .readout.best-ro.beaten::before { background: var(--hazard); }
+/* Instruments a game does not own are removed, not zeroed: the highway's
+   friends counter has no meaning in Coneball, and a dead dial is worse than a
+   shorter bar. */
+#hud .readout.off { display: none; }
+#hud .readout .ic {
+  display: grid; place-items: center;
+  width: 26px; height: 26px; color: var(--accent);
+}
+#hud .readout .ic svg { width: 20px; height: 20px; }
+#hud .readout .meta { display: flex; flex-direction: column; line-height: 1; text-align: left; }
+#hud .readout .lbl {
+  font-size: 0.62rem; font-weight: 600; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .readout .val {
+  font-family: var(--font-mono); font-size: var(--fs-readout);
+  font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+  color: var(--text); margin-top: 3px;
+  transition: color 0.15s var(--ease);
+}
+#hud .readout.bump .val { animation: hud-bump 0.34s var(--ease); }
+@keyframes hud-bump {
+  0% { color: var(--accent); transform: scale(1); }
+  35% { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+
+/* Speed readout gets a little accent bar showing throttle. */
+#hud .speed { flex-direction: column; align-items: stretch; min-width: 148px; gap: 6px; }
+#hud .speed .row { display: flex; align-items: center; gap: 10px; }
+#hud .bar { height: 4px; border-radius: 999px; background: var(--hairline); overflow: hidden; }
+#hud .bar > i {
+  display: block; height: 100%; width: 100%;
+  transform: scaleX(0); transform-origin: left center;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transition: transform 0.25s var(--ease);
+}
+
+/* Near-miss toast — the reward for the risky line. Sits under the playbar so it
+   reads as instrument feedback, not a notification. Transform/opacity only. */
+#hud .nearmiss {
+  position: absolute; top: 124px; left: 50%;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px 7px 11px; border-radius: 999px;
+  color: var(--accent-2);
+  background: var(--surface-hud); border: 1px solid var(--accent-glow);
+  box-shadow: 0 6px 22px var(--accent-glow);
+  backdrop-filter: blur(10px);
+  font-size: var(--fs-label); font-weight: 700;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  opacity: 0; transform: translate(-50%, -6px);
+  pointer-events: none;
+}
+#hud .nearmiss svg { width: 15px; height: 15px; }
+#hud .nearmiss .pts {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  letter-spacing: 0; color: var(--accent);
+}
+#hud .nearmiss.show { animation: nearmiss 0.62s var(--ease); }
+@keyframes nearmiss {
+  0%   { opacity: 0; transform: translate(-50%, 2px) scale(0.94); }
+  18%  { opacity: 1; transform: translate(-50%, -6px) scale(1); }
+  70%  { opacity: 1; transform: translate(-50%, -8px) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -16px) scale(1); }
+}
+
+/* The record-broken flourish: fired the instant the live score passes the
+   stored best, mid-run. Same instrument language as the near-miss toast but
+   inverted — solid hazard-orange plate, because passing your best is the one
+   thing in the game worth interrupting the road for. */
+#hud .record {
+  /* Below the near-miss toast and the collect flourish, so all three can be
+     in flight at once (they genuinely can) without ever colliding. */
+  position: absolute; top: 232px; left: 50%;
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 16px 8px 12px; border-radius: 999px;
+  color: var(--accent-ink);
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border: 1px solid rgba(255,255,255,0.4);
+  box-shadow: 0 10px 30px var(--accent-glow);
+  font-size: var(--fs-label); font-weight: 700;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  opacity: 0; transform: translate(-50%, 0);
+  pointer-events: none;
+}
+#hud .record svg { width: 16px; height: 16px; }
+#hud .record .pts {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+#hud .record.show { animation: record 1.5s var(--ease); }
+@keyframes record {
+  0%   { opacity: 0; transform: translate(-50%, 6px) scale(0.85); }
+  12%  { opacity: 1; transform: translate(-50%, -4px) scale(1.08); }
+  22%  { transform: translate(-50%, -4px) scale(1); }
+  78%  { opacity: 1; transform: translate(-50%, -4px) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -18px) scale(1); }
+}
+
+/* ── The convoy roster ─────────────────────────────────────────────────────
+   The committed idea for friends: a docked left-edge rail that is a *manifest*
+   of the crew, not a number. Each of the five named cones has a chip, dim and
+   unclaimed until you meet them, then lit in their own token colour with a
+   tally of how many are in tow. It is deliberately instrument-DENSE — this is
+   a scanning surface you read at a glance mid-run — and it gives the abstract
+   friends count a cast, which is the whole charm of the epic. Mirrors the
+   3D conga line: the rail fills as the tail grows.
+
+   Runner-specific: the rail is drawn only while the highway is the game on
+   screen, because it is a manifest of THAT game's cast. */
+#hud .roster {
+  position: absolute; left: 20px; top: 50%;
+  transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 12px 11px;
+  border-radius: 14px;
+  background: var(--surface-hud); border: 1px solid var(--hairline);
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 var(--hairline-strong);
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+  pointer-events: none;
+}
+#hud[data-screen="playing"][data-game="highway"] .roster { opacity: 1; }
+#hud[data-screen="gameover"] .roster { opacity: 0; }
+#hud .roster .cap {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 9px; margin-bottom: 3px;
+  border-bottom: 1px solid var(--hairline);
+}
+#hud .roster .cap .lbl {
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .roster .cap .tally {
+  font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--text-dim);
+}
+#hud .roster .cap .tally b { color: var(--accent); font-weight: 600; }
+
+/* One chip per named friend. Dense rows: glyph, name, count. */
+#hud .chip {
+  display: grid; grid-template-columns: 18px 1fr 20px;
+  align-items: center; gap: 8px;
+  padding: 4px 6px 4px 4px; border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+#hud .chip .g {
+  display: grid; place-items: center; width: 18px; height: 18px;
+  color: var(--text-faint);
+  transition: color 0.25s var(--ease), transform 0.25s var(--ease);
+}
+#hud .chip .g svg { width: 17px; height: 17px; }
+#hud .chip .nm {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--text-faint); white-space: nowrap;
+  transition: color 0.25s var(--ease);
+}
+#hud .chip .n {
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; text-align: right;
+  color: var(--text-faint); opacity: 0.45;
+  transition: color 0.25s var(--ease), opacity 0.25s var(--ease);
+}
+/* Met: the chip lights in that friend's own token colour. */
+#hud .chip.met {
+  background: rgba(255,255,255,0.05);
+  border-color: var(--hairline-strong);
+}
+#hud .chip.met .g { color: var(--tint); }
+#hud .chip.met .nm { color: var(--text); }
+#hud .chip.met .n { color: var(--tint); opacity: 1; }
+#hud .chip.pop { animation: chip-pop 0.42s var(--ease); }
+@keyframes chip-pop {
+  0%   { transform: translateX(0) scale(1); }
+  30%  { transform: translateX(4px) scale(1.05); }
+  100% { transform: translateX(0) scale(1); }
+}
+
+/* Narrow viewports: the game-over card would sit on top of the rail, so the
+   rail drops its names and becomes a compact column of tinted glyph+count —
+   still a manifest, just at the density the space allows. */
+@media (max-width: 760px) {
+  #hud .roster { left: 12px; padding: 9px; gap: 4px; }
+  #hud .roster .cap .lbl { display: none; }
+  #hud .chip { grid-template-columns: 18px 18px; gap: 5px; }
+  #hud .chip .nm { display: none; }
+  #hud .chip .n { text-align: left; }
+}
+
+/* The name flourish — the moment a friend joins the line. Same instrument
+   language as the near-miss toast, tinted to that friend, sitting below it so
+   the two can never collide. */
+#hud .collect {
+  position: absolute; top: 178px; left: 50%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px 9px 12px; border-radius: 999px;
+  background: var(--surface-hud);
+  border: 1px solid var(--tint, var(--accent-2));
+  box-shadow: 0 8px 26px rgba(0,0,0,0.45);
+  backdrop-filter: blur(10px);
+  opacity: 0; transform: translate(-50%, 0);
+  pointer-events: none;
+}
+#hud .collect svg { width: 17px; height: 17px; color: var(--tint, var(--accent-2)); }
+#hud .collect .who {
+  font-size: 0.9rem; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--text);
+}
+#hud .collect .joined {
+  font-size: var(--fs-label); font-weight: 600; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .collect .pts {
+  font-family: var(--font-mono); font-size: 0.86rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--tint, var(--accent-2));
+}
+#hud .collect.show { animation: collect 1.05s var(--ease); }
+@keyframes collect {
+  0%   { opacity: 0; transform: translate(-50%, 10px) scale(0.9); }
+  16%  { opacity: 1; transform: translate(-50%, 0) scale(1.04); }
+  26%  { transform: translate(-50%, 0) scale(1); }
+  74%  { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -14px) scale(1); }
+}
+
+/* Game-over stats. */
+#hud .stats { display: flex; gap: 28px; justify-content: center; margin-top: 20px; }
+#hud .stat.off { display: none; }
+#hud .stat .n {
+  font-family: var(--font-mono); font-size: var(--fs-stat); font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--accent);
+}
+#hud .stat .k {
+  font-size: var(--fs-label); letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--text-faint); margin-top: 4px;
+}
+
+/* ── The record plaque ─────────────────────────────────────────────────────
+   The persisted best, drawn as a hazard-taped plate rather than another stat
+   column. It reads as a thing bolted to the card — the one number that
+   survives the run, so it should not look like the two that don't. Rows are
+   deliberately tight: it is a label, not a section. */
+#hud .best {
+  position: relative;
+  /* Its own row, sized to content: it must never flow inline beside the CTA,
+     which is the next thing in the card and a completely different weight. */
+  display: flex; align-items: center; gap: 11px;
+  width: fit-content;
+  margin: 18px auto 0; padding: 9px 16px 9px 13px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.045);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+  transition: border-color 0.3s var(--ease), background 0.3s var(--ease);
+}
+#hud .best::before {
+  content: "";
+  position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: var(--hazard-dim);
+}
+#hud .best .ic { display: grid; place-items: center; color: var(--text-faint); transition: color 0.3s var(--ease); }
+#hud .best .ic svg { width: 19px; height: 19px; }
+#hud .best .k {
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+#hud .best .n {
+  font-family: var(--font-mono); font-size: 1.24rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--text-dim);
+  line-height: 1; margin-top: 3px;
+  transition: color 0.3s var(--ease);
+}
+#hud .best .meta { display: flex; flex-direction: column; align-items: flex-start; }
+/* A card with no record yet shouldn't advertise a zero. */
+#hud .best.empty .n { color: var(--text-faint); }
+/* New record: the plaque lights, the stripe goes full-strength, and the whole
+   thing is stamped in. This is the loudest state in the overlay, and it should
+   be — it happens once a session at best. */
+#hud .best.new {
+  background: var(--accent-wash);
+  border-color: var(--accent-glow);
+}
+#hud .best.new::before { background: var(--hazard); }
+#hud .best.new .ic, #hud .best.new .n { color: var(--accent); }
+#hud .best.new .k { color: var(--accent-2); }
+#hud .best .tag {
+  display: none;
+  padding: 3px 8px; border-radius: 999px; margin-left: 2px;
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-ink); background: var(--accent-2);
+}
+#hud .best.new .tag { display: inline-block; }
+#hud[data-screen="gameover"] .best.new { animation: stamp 0.5s var(--ease) 0.28s backwards; }
+@keyframes stamp {
+  0%   { opacity: 0; transform: scale(1.22); }
+  60%  { opacity: 1; transform: scale(0.97); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Sound toggle — corner-docked, the only always-on control. It sits above the
+   modal scrims on purpose: mute has to be reachable on every screen, including
+   the one where the crash cue just played. */
+#hud .sound {
+  position: absolute; top: 20px; right: 20px; z-index: 2;
+  display: grid; place-items: center;
+  width: 38px; height: 38px; padding: 0;
+  color: var(--text-dim);
+  background: var(--surface-hud); border: 1px solid var(--hairline);
+  border-radius: 11px; backdrop-filter: blur(10px); cursor: pointer;
+  pointer-events: auto;
+  transition: color 0.2s var(--ease), transform 0.15s var(--ease),
+    border-color 0.2s var(--ease);
+}
+#hud .sound svg { width: 19px; height: 19px; }
+#hud .sound:hover { color: var(--accent-2); border-color: var(--hairline-strong); transform: translateY(-1px); }
+#hud .sound:active { transform: scale(0.94); }
+#hud .sound:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 2px; }
+#hud .sound[data-muted="true"] { color: var(--text-faint); }
+#hud .sound .on { display: block; }
+#hud .sound .off { display: none; }
+#hud .sound[data-muted="true"] .on { display: none; }
+#hud .sound[data-muted="true"] .off { display: block; }
+
+/* Game-over: who actually came along. A row of tinted cone glyphs, one per
+   friend collected, capped so a heroic run doesn't overflow the card. Reading
+   the names back is the payoff for the whole verb. */
+#hud .convoy {
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hairline);
+}
+#hud .convoy:empty { display: none; }
+#hud .convoy .co {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px 4px 7px; border-radius: 999px;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--hairline);
+  font-size: 0.7rem; font-weight: 600; color: var(--text-dim);
+}
+#hud .convoy .co svg { width: 14px; height: 14px; color: var(--tint); }
+#hud .convoy .more {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+#hud .crash { color: var(--danger); display: inline-grid; place-items: center; }
+#hud .crash svg { width: 40px; height: 40px; }
+/* The way out of a finished run: quieter than "Run it back", because replaying
+   is the thing you usually want and the cabinet is the thing you occasionally
+   want. Still a real button with real feedback. */
+#hud .ghost {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 12px; padding: 10px 16px;
+  font-size: var(--fs-label); font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-dim);
+  background: transparent; border: 1px solid var(--hairline);
+  border-radius: 10px; cursor: pointer;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease),
+    background 0.2s var(--ease), transform 0.12s var(--ease);
+}
+#hud .ghost svg { width: 15px; height: 15px; }
+#hud .ghost:hover { color: var(--text); border-color: var(--hairline-strong); background: rgba(255,255,255,0.05); transform: translateY(-1px); }
+#hud .ghost:active { transform: translateY(0) scale(0.98); }
+#hud .ghost:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 3px; }
+
+#hud[data-screen="gameover"] .screen.gameover .crash,
+#hud[data-screen="gameover"] .screen.gameover .eyebrow,
+#hud[data-screen="gameover"] .screen.gameover .title,
+#hud[data-screen="gameover"] .screen.gameover .stats,
+#hud[data-screen="gameover"] .screen.gameover .btn {
+  animation: rise 0.4s var(--ease) backwards;
+}
+#hud[data-screen="gameover"] .screen.gameover .eyebrow { animation-delay: 60ms; }
+#hud[data-screen="gameover"] .screen.gameover .title { animation-delay: 120ms; }
+#hud[data-screen="gameover"] .screen.gameover .stats { animation-delay: 180ms; }
+#hud[data-screen="gameover"] .screen.gameover .btn { animation-delay: 240ms; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Loading skeleton — shapes matching the final layout, with a shimmer. ─── */
+#hud .sk {
+  position: relative; overflow: hidden;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--hairline); border-radius: 12px;
+}
+#hud .sk::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.09), transparent);
+  transform: translateX(-100%); animation: hud-shimmer 1.15s infinite;
+}
+@keyframes hud-shimmer { 100% { transform: translateX(100%); } }
+#hud .skeleton .sk-bar { position: absolute; top: 18px; left: 0; right: 0; display: flex; gap: 12px; justify-content: center; }
+#hud .skeleton .sk-pill { width: 116px; height: 62px; }
+#hud .skeleton .sk-pill.wide { width: 148px; }
+/* The sound toggle resolves in place too — a control appearing out of nowhere
+   after the first frame is the same broken promise as a card that jumps. */
+#hud .skeleton .sk-sound { position: absolute; top: 20px; right: 20px; width: 38px; height: 38px; border-radius: 11px; }
+/* The skeleton models the CABINET — masthead, a 2×2 of card shapes, and the
+   launch strip — at the real footprint and the real left dock, so nothing
+   moves when the first frame lands. Promising a shape that then vanishes is
+   worse than not promising it at all. */
+#hud .skeleton .sk-cabinet {
+  display: flex; flex-direction: column; gap: 18px;
+  width: min(92vw, 660px);
+  padding: 22px 24px 20px;
+  border-radius: 22px;
+  border: 1px solid var(--hairline);
+  background: rgba(255,255,255,0.03);
+}
+#hud .skeleton .sk-head { width: 62%; height: 66px; }
+#hud .skeleton .sk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#hud .skeleton .sk-tile { height: 108px; border-radius: 14px; }
+#hud .skeleton .sk-launch { height: 52px; }
+#hud .skeleton .sk-stage { display: grid; place-items: center start; }
+#hud .skeleton .sk-cabinet { margin-left: clamp(20px, 5vw, 88px); }
+@media (max-width: 1000px) {
+  #hud .skeleton .sk-stage { place-items: center; }
+  #hud .skeleton .sk-cabinet { margin-left: 0; }
+}
+@media (max-width: 560px) {
+  #hud .skeleton .sk-cabinet { width: 94vw; padding: 18px 16px 16px; }
+  #hud .skeleton .sk-grid { grid-template-columns: minmax(0, 1fr); }
+  #hud .skeleton .sk-tile { height: 84px; }
+}
+
+/* Reduced-motion: kill transforms/shimmer, keep opacity legible. */
+@media (prefers-reduced-motion: reduce) {
+  #hud .screen, #hud .playbar { transition: opacity 0.2s linear; transform: none !important; }
+  #hud .btn, #hud .readout .val, #hud .bar > i { transition: none; }
+  #hud .readout.bump .val { animation: none; }
+  /* Cards keep their state change legible — it just stops travelling. */
+  #hud .gcard, #hud .ghost { transition: background 0.2s linear, border-color 0.2s linear; }
+  #hud .gcard:hover, #hud .gcard:active, #hud .ghost:hover, #hud .ghost:active { transform: none; }
+  #hud .gcard .shot img { transition: opacity 0.2s linear; transform: none !important; }
+  /* The rail must keep its centring transform; only the animation goes. */
+  #hud .roster { transform: translateY(-50%) !important; }
+  #hud .chip.pop { animation: none; }
+  /* The collect flourish still appears — naming your friend is the payoff and
+     feedback is not optional — it just fades instead of travelling. */
+  #hud .collect { transform: translate(-50%, 0) !important; }
+  #hud .collect.show { animation: collect-rm 1.05s linear; }
+  @keyframes collect-rm {
+    0%, 100% { opacity: 0; }
+    16%, 74% { opacity: 1; }
+  }
+  #hud[data-screen="gameover"] .screen.gameover .crash,
+  #hud[data-screen="gameover"] .screen.gameover .eyebrow,
+  #hud[data-screen="gameover"] .screen.gameover .title,
+  #hud[data-screen="gameover"] .screen.gameover .stats,
+  #hud[data-screen="gameover"] .screen.gameover .btn,
+  #hud[data-screen="gameover"] .best.new,
+  #hud .sk::after { animation: none; }
+  #hud .sound, #hud .best { transition: none; }
+  /* A new record still announces itself — it just doesn't travel. */
+  #hud .record { transform: translate(-50%, 0) !important; }
+  #hud .record.show { animation: record-rm 1.5s linear; }
+  @keyframes record-rm {
+    0%, 100% { opacity: 0; }
+    12%, 78% { opacity: 1; }
+  }
+  /* The toast still appears (feedback is not optional) — it just fades rather
+     than travelling. */
+  #hud .nearmiss.show { animation: nearmiss-rm 0.62s linear; }
+  @keyframes nearmiss-rm {
+    0%, 100% { opacity: 0; }
+    18%, 70% { opacity: 1; }
+  }
+}

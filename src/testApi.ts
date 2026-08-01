@@ -24,7 +24,30 @@
  *
  * The renderer supplies the concrete implementations (see GaryTestHooks) so this
  * module stays free of game/render specifics.
+ *
+ * ── The arcade extension ────────────────────────────────────────────────────
+ * The cabinet holds several games, so the contract gained `game`, `games`,
+ * `snapshot`, `selectGame(id)`, `input(action)`, `backToMenu()` and
+ * `highScores`. Every pre-arcade member keeps working unchanged: `state`,
+ * `score`, `lane`, `speed`, `friends` still describe the highway exactly as
+ * before, `start()` still starts it, and `highScore` still returns the SELECTED
+ * game's best (the highway, by default).
+ *
+ * ── The reserved per-game command hook ──────────────────────────────────────
+ * `command(name, payload)` is the extension point sibling tickets use so they
+ * never have to edit THIS file. A game declares its own commands by merging
+ * into `ArcadeCommandMap` from its own module and implements `handleCommand` on
+ * its runtime; the signature here is generic over that map, so a new command is
+ * type-checked at the call site with no shared-file edit.
  */
+import { GAME_IDS } from './game/arcade/contracts.ts';
+import type {
+  ArcadeAction,
+  ArcadeCommandMap,
+  ArcadeCommandName,
+  ArcadeSnapshot,
+  GameId,
+} from './game/arcade/contracts.ts';
 import type { GameStatus, GameStore } from './game/state.ts';
 
 /** Concrete implementations wired in by the renderer (src/main.ts). */
@@ -43,12 +66,27 @@ export interface GaryTestHooks {
   nearMissCount: () => number;
   /** How many friends are currently trailing Gary in the conga line. */
   congaLength: () => number;
-  /** The persisted best score (read through the storage adapter in main.ts). */
+  /** The SELECTED game's persisted best (via the storage adapter in main.ts). */
   highScore: () => number;
+  /** Every game's persisted best, keyed by id. */
+  highScores: () => Record<GameId, number>;
   /** Live particles across every fx pool. */
   particleCount: () => number;
   /** Whether Gary's death animation is currently playing. */
   dying: () => boolean;
+  /** The active runtime's own report of itself. */
+  snapshot: () => ArcadeSnapshot;
+  /** Point the cabinet at a game (menu only, enforced by the store). */
+  selectGame: (id: GameId) => void;
+  /** Feed a normalized action through the real routing path. */
+  input: (action: ArcadeAction) => void;
+  /** Leave a finished run for the select grid (gameover only). */
+  backToMenu: () => void;
+  /** Forward a per-game command; false if that game doesn't implement it. */
+  command: <K extends ArcadeCommandName>(
+    name: K,
+    payload: ArcadeCommandMap[K],
+  ) => boolean;
 }
 
 /** A read-only snapshot of the next thing Gary is about to meet. */
@@ -119,8 +157,55 @@ export interface GaryTestApi {
    * that the state merely changed.
    */
   readonly dying: boolean;
+  /**
+   * Which game the cabinet is pointed at. On the menu this is the highlighted
+   * card; while playing it is the game actually running. Mirrors
+   * `GameState.selectedGame`.
+   */
+  readonly game: GameId;
+  /** Every game in the cabinet, in grid order. Static — it mirrors the catalog. */
+  readonly games: readonly GameId[];
+  /**
+   * The active runtime's own snapshot: score, live entities and whatever that
+   * game calls its second number. This is how a test asserts on a game the
+   * store has no fields for — a tower's height is not a `lane`.
+   */
+  readonly snapshot: ArcadeSnapshot;
+  /**
+   * Every game's persisted best, keyed by id. `highScore` remains the SELECTED
+   * game's best, so a pre-arcade test that never selects anything still reads
+   * the highway's record.
+   */
+  readonly highScores: Record<GameId, number>;
   /** Begin / restart play (menu|gameover -> playing). */
   start: () => void;
+  /**
+   * Point the cabinet at a game. Menu only — the store refuses mid-run, so a
+   * test cannot swap the game out from under a live score.
+   */
+  selectGame: (id: GameId) => void;
+  /**
+   * Feed a normalized action through the REAL routing path — the same
+   * `routeAction` the keyboard and touch handlers use. A test driving the menu
+   * with `input('right')` exercises the shipping navigation rather than a
+   * parallel one.
+   */
+  input: (action: ArcadeAction) => void;
+  /** Leave a finished run for the select grid. Gameover only. */
+  backToMenu: () => void;
+  /**
+   * Send a deterministic command to the active runtime. Returns false when that
+   * game does not implement the command, so a test can tell "not handled" from
+   * "handled and did nothing".
+   *
+   * Reserved for sibling tickets: they declare their commands by merging into
+   * `ArcadeCommandMap` from their own module, so adding one never edits this
+   * file.
+   */
+  command: <K extends ArcadeCommandName>(
+    name: K,
+    payload: ArcadeCommandMap[K],
+  ) => boolean;
   /** Deterministic hook: move Gary to lane n. */
   __setLane: (n: number) => void;
   /** Deterministic hook: force a collision -> gameover. */
@@ -191,8 +276,32 @@ export function installTestApi(
     get dying() {
       return hooks.dying();
     },
+    get game() {
+      return store.getState().selectedGame;
+    },
+    get games() {
+      return GAME_IDS;
+    },
+    get snapshot() {
+      return hooks.snapshot();
+    },
+    get highScores() {
+      return hooks.highScores();
+    },
     start() {
       store.start();
+    },
+    selectGame(id: GameId) {
+      hooks.selectGame(id);
+    },
+    input(action: ArcadeAction) {
+      hooks.input(action);
+    },
+    backToMenu() {
+      hooks.backToMenu();
+    },
+    command(name, payload) {
+      return hooks.command(name, payload);
     },
     __setLane(n: number) {
       hooks.setLane(n);

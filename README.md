@@ -66,7 +66,19 @@ interface GaryTestApi {
   readonly highScore: number;                       // persisted best (0 = none yet)
   readonly particles: number;                       // live fx particles, all pools
   readonly dying: boolean;                          // death animation in flight
+
+  // ── Arcade shell ──────────────────────────────────────────────────────────
+  readonly game: GameId;                  // selected game; mirrors selectedGame
+  readonly games: readonly GameId[];      // the cabinet, in grid order
+  readonly snapshot: ArcadeSnapshot;      // the active runtime's own report
+  readonly highScores: Record<GameId, number>;      // every game's best
+
   start(): void;                                     // menu|gameover -> playing
+  selectGame(id: GameId): void;                      // menu only
+  input(action: ArcadeAction): void;                 // through the real routing
+  backToMenu(): void;                                // gameover only
+  command<K>(name: K, payload): boolean;             // per-game test commands
+
   __setLane(n: number): void;                        // move Gary to lane n
   __forceCollision(): void;                          // force -> gameover
   __spawnFriend(): void;                             // spawn a collectible friend
@@ -80,7 +92,30 @@ declare global {
 ```
 
 Menu values: `state: 'menu'`, `score: 0`, `friends: 0`, `lane: 1` (centre),
-`speed: 0`, `ready: true` once a frame has rendered.
+`speed: 0`, `game: 'highway'`, `ready: true` once a frame has rendered.
+
+The arcade members are **purely additive**. `state`, `score`, `lane`, `speed`
+and `friends` keep their exact pre-arcade meanings (a non-runner game simply
+leaves `lane: 1`, `speed: 0`, `friends: 0`), `start()` still starts the highway
+by default, and `highScore` still returns the *selected* game's best — which is
+the highway's until something else is selected.
+
+`snapshot` is how a test asserts on a game the store has no fields for: a
+tower's height is not a `lane`. Each runtime reports `{ game, score, entities,
+metric }`, where `metric` is that game's one headline number (`Friends` on the
+highway, `Height` on the tower), and the HUD draws the same slot generically.
+
+`input(action)` feeds one of `left | right | up | down | primary | back`
+through the **real** routing path — the same `routeAction` the keyboard and
+touch handlers use — so a test driving the menu exercises shipping navigation
+rather than a parallel implementation.
+
+`command(name, payload)` is the reserved per-game hook. A game declares its own
+commands by merging into `ArcadeCommandMap` **from its own module** and
+implementing `handleCommand` on its runtime, so adding one never edits
+`src/testApi.ts`. It returns `false` when the active game doesn't implement the
+command, which lets a test distinguish "not handled" from "handled, did
+nothing".
 
 **Deterministic test hooks** (`__`-prefixed) force specific situations so e2e
 never depends on random spawns. Their names/signatures are **pinned by the
@@ -123,13 +158,103 @@ than that the state merely changed.
   reads it in the same change.
 - Mirror the type in `src/testApi.ts` so `Window.__GARY__` stays accurate.
 
+## The arcade shell
+
+The app is a **cabinet** holding four games. One shell owns every shared
+service; each game owns nothing but itself. That split is what lets several
+games be built in parallel without their authors colliding in `main.ts`.
+
+```
+src/game/arcade/     pure, no three/DOM/window
+  contracts.ts       GameId · ArcadeAction · ArcadeSnapshot · ArcadeCommandMap
+  catalog.ts         the four entries: title, description, cast, controls, preview
+  input.ts           key/gesture -> action mapping, and status-aware routing
+src/arcade/
+  runtime.ts         the ArcadeGameRuntime contract + RuntimeRegistry
+  games/highway.ts   the original runner, behind the contract, rules unchanged
+  games/{tower,coneball,royalRoll}.ts   reserved slots (real, honest placeholders)
+src/render/          pre-wired contracts the shell already calls
+  pipeline.ts        render/resize/dispose — post-processing lands behind this
+  quality.ts         device tier -> pixel-ratio / AA / post budget
+  materials.ts       the shared material cache
+src/ui/
+  hud.ts             the shell + generic surfaces (score, best, metric, gameover)
+  gameSelect.ts      the 2×2 grid (layout-grid semantics, roving tabindex)
+  runnerHud.ts       highway-only telemetry (convoy rail, toasts, speed)
+  icons.ts / hud.css the one icon set, and component styles
+```
+
+**Who owns what.** `src/main.ts` owns *only* common services: renderer,
+pipeline, camera, store, registry, audio, high scores, input normalisation, the
+HUD shell, resize and the frame loop. It contains no key names, no game rules
+and no per-game branching. A runtime owns its own scene subtree, simulation,
+feel and camera framing, and never touches the renderer, `requestAnimationFrame`
+or `localStorage`.
+
+**The runtime lifecycle**, in the order the shell calls it:
+
+```
+enter(scene)     once, when the game is opened      — add your subtree
+reset()          on every menu|gameover -> playing  — clean, playable state
+update(ctx)      once a frame                       — { dt, time, reducedMotion }
+handleInput(a)   per routed action                  — already normalized
+snapshot()       on demand                          — { game, score, entities, metric }
+cameraTarget()   once a frame                       — pose + lambda + shake
+leave(scene)     once, on the way back to the menu  — undo exactly what enter did
+```
+
+`enter`/`leave` must be symmetric: switching games twice must leave nothing
+behind. `e2e/arcade-menu.spec.ts` walks in and out of every slot to prove it.
+
+### Adding a game
+
+1. Add a `GameId` to `GAME_IDS` in `src/game/arcade/contracts.ts`.
+2. Add its entry to `GAMES` in `src/game/arcade/catalog.ts` — title, short
+   title, description, cast (indexes into `FRIENDS`), control hints, and a
+   preview imported from `src/assets/previews/`. Import it through Vite; never
+   write a root-absolute `/assets/...` path, because production is served from
+   the `/gary-and-friends/` GitHub Pages subpath.
+3. Drop a `webp` preview into `src/assets/previews/`.
+4. Implement `ArcadeGameRuntime` in `src/arcade/games/`, and register it in
+   `main.ts`'s registry block.
+5. Flip `playable: true` in the catalog when it's genuinely playable.
+6. Optional: declare deterministic test commands by merging into
+   `ArcadeCommandMap` from your own module and implementing `handleCommand`.
+
+Steps 1, 2 and 4–6 are the *only* shared-file edits, and none of them touches
+the HUD, the store, the input layer or `testApi.ts`. Game-specific telemetry
+goes in its own `src/ui/*Hud.ts` module, like `runnerHud.ts`.
+
+### Selection, input and per-game records
+
+- `GameState.selectedGame` is the source of truth. `selectGame(id)` is **menu
+  only** (changing games mid-run would leave the HUD describing a game nobody
+  played) and `returnToMenu()` is **gameover only** (the menu is reachable from
+  the end of a run, not by abandoning one).
+- Input is normalized before anything game-shaped sees it, then routed by
+  status. That routing is why **Space never both starts a run and fires an
+  in-game action**: once the status is `playing`, `primary` belongs to the
+  runtime and has already stopped meaning "start".
+- The select grid uses the WAI-ARIA **layout grid** pattern — `role="grid"` with
+  row/gridcell wrappers and real `<button>`s — deliberately *not* `role="menu"`,
+  which would promise a menubar keyboard contract the screen doesn't implement.
+  A roving `tabindex` keeps exactly one card in the tab order; the browser owns
+  Enter/Space activation, and the shell skips any key whose target is inside the
+  grid so a keystroke can never fire twice.
+- **High scores are per game.** The highway keeps the original un-namespaced
+  `gary.highScore.v1` so an existing player's record survives the upgrade;
+  everything else is `gary.highScore.<id>.v1`.
+
 ## Where the logic / rendering seam lives
 
 - **Game logic (pure, unit-tested, no three.js):** `src/game/state.ts` — the
   `GameStore`. Source of truth for `status`, `score`, `lane` (0..2, centre = 1),
-  `speed` and `friends`, plus the transitions/subscriptions. Actions: `start`
-  (also the restart path), `addScore`, `addFriends`, `setLane` (clamped),
-  `setSpeed`, `gameOver`, `reset`. Test: `src/game/state.test.ts`.
+  `speed`, `friends` and `selectedGame`, plus the transitions/subscriptions.
+  Actions: `start` (also the restart path), `addScore`, `addFriends`, `setLane`
+  (clamped), `setSpeed`, `gameOver`, `reset`, `selectGame` (menu only) and
+  `returnToMenu` (gameover only). Test: `src/game/state.test.ts`.
+- **Arcade (pure):** `src/game/arcade/` — the catalog, the id/action/snapshot
+  vocabulary, and the input mapping + routing. See "The arcade shell" above.
 - **Gameplay simulation (pure):** `src/game/gameplay/` — `run.ts` (`Run`: ticks
   the world, owns distance/score/collision/near-misses/friend-collection and
   talks to the world only through store actions) and `difficulty.ts` (the speed
@@ -146,12 +271,17 @@ than that the state merely changed.
   seconds since impact). Timing is logic, so it is tested at any timestep rather
   than tuned by magic numbers in the render loop.
 - **High score (pure + a port):** `src/game/highScore.ts` — the new-best rule and
-  the parse/sanitise layer as plain functions, over an injected `StoragePort`.
+  the parse/sanitise layer as plain functions, over an injected `StoragePort`,
+  now keyed per game (`highScoreKey`, `loadGameHighScore`, `submitGameHighScore`,
+  `loadAllHighScores`, plus highway-shaped compatibility wrappers).
   `src/main.ts` supplies the one and only `localStorage` adapter in the app.
 - **Test API (the bridge):** `src/testApi.ts` — projects `GameStore` onto
   `window.__GARY__` (getters) and exposes the deterministic `__`-hooks.
-- **Rendering (three.js, browser-only):** `src/main.ts` (scene, fog, the two
-  camera rigs + animation loop), `src/scene/gary.ts` (procedural googly-eyed cone) and
+- **Rendering (three.js, browser-only):** `src/main.ts` (the arcade shell: scene,
+  fog, camera damping + animation loop — the camera *rigs* now belong to each
+  runtime), `src/arcade/games/highway.ts` (the runner's scene wiring, rigs,
+  death animation and trauma, moved out of `main.ts` with no rule changes),
+  `src/scene/gary.ts` (procedural googly-eyed cone) and
   `src/scene/road.ts` (`Road`: 3-lane highway with instanced, recycled
   dash/barrier/light families scrolled by visual speed) and
   `src/scene/traffic.ts` (`Traffic`: one instanced mesh per vehicle silhouette,
@@ -163,11 +293,14 @@ than that the state merely changed.
   `src/audio.ts` owns the gesture-unlocked, procedurally synthesised cues, and
   `src/theme.ts` pins the 3D brand tokens to their CSS counterparts. This side
   *reads* the store and never owns state.
-- **DOM overlay:** `src/ui/hud.ts` — title screen / telemetry HUD / convoy roster
-  rail / game-over card / record plaque / sound toggle and the async loading
-  skeleton, a projection of the store like the test API.
+- **DOM overlay:** `src/ui/hud.ts` — the shell and the *generic* surfaces (score,
+  best, the game-specific metric slot, game-over, sound toggle, loading
+  skeleton), with the select grid in `gameSelect.ts`, highway-only telemetry in
+  `runnerHud.ts`, the shared icon set in `icons.ts` and component styles in
+  `hud.css`. A projection of the store, like the test API.
 - **Browser e2e:** `e2e/smoke.spec.ts`, `e2e/gameplay.spec.ts`,
-  `e2e/friends.spec.ts`, `e2e/juice.spec.ts`.
+  `e2e/friends.spec.ts`, `e2e/juice.spec.ts`, `e2e/touch.spec.ts`,
+  `e2e/state-guards.spec.ts`, `e2e/arcade-menu.spec.ts`.
 
 Keeping state out of the renderer is what makes the game testable both fast
 (Vitest on `GameStore`) and for real (Playwright via `__GARY__`).

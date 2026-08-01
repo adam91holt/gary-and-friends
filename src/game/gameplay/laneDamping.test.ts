@@ -8,6 +8,7 @@ import {
 import { MAX_SPEED } from './difficulty.ts';
 import { GARY_HALF_WIDTH } from './run.ts';
 
+// (Renamed from the scratch-named `__dbg.test.ts`; the assertion is unchanged.)
 it('renderer-rate damping clears the previous lane before the fastest next beat', () => {
   const available = trafficInterval(MAX_SPEED, SPAWN_JITTER_MIN);
   const travelled = LANE_WIDTH * (1 - Math.exp(-9 * available));

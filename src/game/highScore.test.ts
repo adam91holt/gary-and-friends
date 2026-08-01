@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { GAME_IDS } from './arcade/contracts.ts';
 import {
   HIGH_SCORE_KEY,
+  highScoreKey,
   isNewBest,
+  loadAllHighScores,
+  loadGameHighScore,
   loadHighScore,
   parseHighScore,
   resolveHighScore,
+  submitGameHighScore,
   submitHighScore,
   type StoragePort,
 } from './highScore.ts';
@@ -127,5 +132,85 @@ describe('persistence boundary', () => {
       best: 300,
       isNew: true,
     });
+  });
+});
+
+describe('per-game keys', () => {
+  it('keeps the highway on its original un-namespaced key', () => {
+    // Load-bearing for upgrades: an existing player's record lives here.
+    expect(highScoreKey('highway')).toBe('gary.highScore.v1');
+    expect(HIGH_SCORE_KEY).toBe('gary.highScore.v1');
+  });
+
+  it('namespaces every other game', () => {
+    expect(highScoreKey('tower')).toBe('gary.highScore.tower.v1');
+    expect(highScoreKey('coneball')).toBe('gary.highScore.coneball.v1');
+    expect(highScoreKey('royal-roll')).toBe('gary.highScore.royal-roll.v1');
+  });
+
+  it('gives every game a distinct key', () => {
+    const keys = GAME_IDS.map(highScoreKey);
+    expect(new Set(keys).size).toBe(GAME_IDS.length);
+  });
+
+  it('a pre-arcade stored best is still read as the highway best', () => {
+    // The exact upgrade scenario: storage written before the cabinet existed.
+    const storage = memoryStorage({ 'gary.highScore.v1': '4242' });
+    expect(loadGameHighScore(storage, 'highway')).toBe(4242);
+    expect(loadHighScore(storage)).toBe(4242);
+    // ...and it did NOT leak into the new games.
+    expect(loadGameHighScore(storage, 'tower')).toBe(0);
+  });
+
+  it('records are independent per game', () => {
+    const storage = memoryStorage();
+
+    expect(submitGameHighScore(storage, 'tower', 80, 0)).toEqual({
+      best: 80,
+      isNew: true,
+    });
+    expect(submitGameHighScore(storage, 'coneball', 12, 0)).toEqual({
+      best: 12,
+      isNew: true,
+    });
+
+    expect(storage.data['gary.highScore.tower.v1']).toBe('80');
+    expect(storage.data['gary.highScore.coneball.v1']).toBe('12');
+    // Beating the tower record must not touch coneball's, or the highway's.
+    expect(submitGameHighScore(storage, 'tower', 500, 80).best).toBe(500);
+    expect(loadGameHighScore(storage, 'coneball')).toBe(12);
+    expect(loadGameHighScore(storage, 'highway')).toBe(0);
+  });
+
+  it('a worse run leaves that game’s key untouched', () => {
+    const storage = memoryStorage({ 'gary.highScore.tower.v1': '300' });
+    expect(submitGameHighScore(storage, 'tower', 200, 300)).toEqual({
+      best: 300,
+      isNew: false,
+    });
+    expect(storage.data['gary.highScore.tower.v1']).toBe('300');
+  });
+
+  it('loadAllHighScores reports one number per game', () => {
+    const storage = memoryStorage({
+      'gary.highScore.v1': '900',
+      'gary.highScore.coneball.v1': '17',
+    });
+    expect(loadAllHighScores(storage, GAME_IDS)).toEqual({
+      highway: 900,
+      tower: 0,
+      coneball: 17,
+      'royal-roll': 0,
+    });
+  });
+
+  it('loadAllHighScores degrades to zeroes without storage', () => {
+    expect(loadAllHighScores(null, GAME_IDS)).toEqual({
+      highway: 0,
+      tower: 0,
+      coneball: 0,
+      'royal-roll': 0,
+    });
+    expect(loadAllHighScores(hostileStorage, GAME_IDS).tower).toBe(0);
   });
 });
