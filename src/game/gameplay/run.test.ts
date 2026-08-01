@@ -275,6 +275,7 @@ describe('Run: restart', () => {
       lane: CENTER_LANE,
       speed: BASE_SPEED,
       friends: 0,
+      selectedGame: 'highway',
     });
   });
 

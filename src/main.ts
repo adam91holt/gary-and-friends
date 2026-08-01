@@ -1,13 +1,15 @@
 /**
- * Renderer / bootstrap. The rendering side of the seam: it owns three.js, the
- * canvas, the chase camera and the animation loop, and it READS from the
- * GameStore. All game logic lives in src/game/*; this file stays logic-light so
- * the store stays unit-testable without a browser.
+ * The arcade shell. The rendering side of the seam, and nothing else.
  *
- * What lives here: a scrolling 3-lane highway (see scene/road.ts), Gary lerping
- * between lane positions driven by store.lane, a chase camera that eases behind
- * him, and the DOM HUD (ui/hud.ts). The store is never mutated from the loop —
- * only from explicit user intent (keyboard / HUD buttons) and the test hooks.
+ * It owns only COMMON SERVICES — the renderer and its pipeline, the camera, the
+ * store, the runtime registry, audio, per-game high scores, input normalisation,
+ * the HUD shell, resize handling and the frame loop — and it knows nothing about
+ * any particular game. Every game-shaped decision (what to draw, what a swipe
+ * means, where the camera should be, what the second instrument counts) belongs
+ * to an `ArcadeGameRuntime` in `src/arcade/games/`.
+ *
+ * That is what lets four games coexist: a sibling adds a runtime file and fills
+ * its pre-reserved catalog entry, and this file does not change.
  */
 // Self-hosted variable display face. Bundled by Vite (no network/CDN at runtime)
 // so the type scale in index.html renders in its intended voice rather than
@@ -16,39 +18,40 @@ import '@fontsource-variable/space-grotesk/wght.css';
 import {
   ACESFilmicToneMapping,
   AmbientLight,
-  DirectionalLight,
   Fog,
   HemisphereLight,
   MathUtils,
-  Mesh,
-  MeshStandardMaterial,
   PerspectiveCamera,
-  PlaneGeometry,
   Scene,
   WebGLRenderer,
 } from 'three';
 import { GameAudio } from './audio.ts';
-import { DEATH_DURATION, deathPose } from './game/fx/death.ts';
+import { HighwayRuntime } from './arcade/games/highway.ts';
+import { createConeballRuntime } from './arcade/games/coneball.ts';
+import { createRoyalRollRuntime } from './arcade/games/royalRoll.ts';
+import { createTowerRuntime } from './arcade/games/tower.ts';
+import { RuntimeRegistry } from './arcade/runtime.ts';
+import { gameEntry } from './game/arcade/catalog.ts';
 import {
-  addTrauma,
-  CRASH_TRAUMA,
-  decayTrauma,
-  NEAR_MISS_TRAUMA,
-  PICKUP_TRAUMA,
-  shakeOffset,
-} from './game/fx/shake.ts';
-import { Run } from './game/gameplay/run.ts';
+  GAME_IDS,
+  type ArcadeAction,
+  type GameId,
+} from './game/arcade/contracts.ts';
 import {
-  loadHighScore,
-  submitHighScore,
+  actionForKey,
+  actionForSwipe,
+  actionForTap,
+  isTapTravel,
+  routeAction,
+} from './game/arcade/input.ts';
+import {
+  loadAllHighScores,
+  submitGameHighScore,
   type StoragePort,
 } from './game/highScore.ts';
 import { GameStore } from './game/state.ts';
-import { createGary } from './scene/gary.ts';
-import { Friends } from './scene/friends.ts';
-import { ParticleFx } from './scene/particles.ts';
-import { laneToX, Road } from './scene/road.ts';
-import { Traffic } from './scene/traffic.ts';
+import { createPipeline } from './render/pipeline.ts';
+import { detectQuality, qualitySettings, readDeviceProfile } from './render/quality.ts';
 import { installTestApi, type GaryTestHooks } from './testApi.ts';
 import { BG } from './theme.ts';
 import { Hud } from './ui/hud.ts';
@@ -56,12 +59,8 @@ import { Hud } from './ui/hud.ts';
 const store = new GameStore();
 const audio = new GameAudio();
 
-// The particle layer: hop dust, collect pops, near-miss sparks, crash debris.
-// Pure pools in src/game/fx/particles.ts; this is only their mesh.
-const fx = new ParticleFx();
-
 /**
- * The storage adapter for the persisted best. This is the ONLY place in the app
+ * The storage adapter for the persisted bests. This is the ONLY place in the app
  * that touches `localStorage` — `game/highScore.ts` holds the rules and takes
  * this port, so the whole comparison/parse layer stays unit-testable in node.
  * Access is probed once, because a browser with storage disabled throws on the
@@ -75,52 +74,18 @@ const storage: StoragePort | null = (() => {
   }
 })();
 
-/** The current best. Presentation state, mirrored onto the HUD and test API. */
-let highScore = loadHighScore(storage);
+/** Every game's best. Presentation state, mirrored onto the HUD and test API. */
+const highScores = loadAllHighScores(storage, GAME_IDS);
 /** Latch so the mid-run record fanfare fires once per run, not once per frame. */
 let recordAnnounced = false;
 
-// Feedback for threading a gap: a whoosh cue plus a short accent pulse the HUD
-// and the lighting both read. Set by the simulation, decayed by the loop.
-let nearMissFlash = 0;
-// Same idea for a pickup, but warmer and longer: collecting a friend is the
-// happiest thing in the game and should light the whole road for a moment.
-let friendFlash = 0;
-/**
- * Camera trauma (see game/fx/shake.ts). Events ADD to it and the loop bleeds it
- * off, so a near miss during the crash shake deepens the same lurch rather than
- * restarting a competing one.
- */
-let trauma = 0;
-/** Seconds since the crash, or null while Gary is alive. Drives `deathPose`. */
-let deathTime: number | null = null;
-/** Where Gary was standing when he was hit. The death pose is relative to it. */
-let deathX = 0;
-
-// The gameplay simulation (traffic, friends, scoring, difficulty, collision).
-// Pure logic — this file only ticks it and draws whatever it says.
-const run = new Run(store, {
-  onNearMiss: (vehicleX) => {
-    nearMissFlash = 1;
-    trauma = addTrauma(trauma, NEAR_MISS_TRAUMA);
-    audio.nearMiss();
-    hud.pulse();
-    // Spray sparks off the side the traffic actually passed, rather than
-    // guessing from Gary's lane (which points the wrong way in the centre lane).
-    const side = Math.sign(vehicleX - gary.root.position.x) || 1;
-    if (!reducedMotion) fx.nearMiss(gary.root.position.x, side);
-  },
-  onFriend: (pickup) => {
-    friendFlash = 1;
-    trauma = addTrauma(trauma, PICKUP_TRAUMA);
-    audio.friend();
-    hud.collected(pickup);
-    if (!reducedMotion) fx.pop(gary.root.position.x, pickup.variant);
-  },
-});
+/** The selected game's best — the number the legacy `highScore` field returns. */
+function selectedBest(): number {
+  return highScores[store.getState().selectedGame];
+}
 
 // Honour the OS reduced-motion preference in the 3D layer too, not just CSS:
-// camera sweeps snap instead of easing, and Gary's idle bob is stilled.
+// camera sweeps snap instead of easing, and idle animation is stilled.
 const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 let reducedMotion = reducedMotionQuery.matches;
 reducedMotionQuery.addEventListener('change', (e) => {
@@ -129,40 +94,6 @@ reducedMotionQuery.addEventListener('change', (e) => {
 
 // `ready` flips true after the first rendered frame. Tests wait on this.
 let hasRenderedFrame = false;
-
-// Deterministic test hooks. Names/signatures are pinned in testApi.ts; the
-// concrete behaviour is supplied here. 02/03 fill in spawnFriend without
-// renaming anything.
-const hooks: GaryTestHooks = {
-  setLane: (n) => store.setLane(n),
-  // Goes through the real collision predicate (Run.forceCollision injects a
-  // vehicle onto Gary), so the e2e hook exercises collision, not just state.
-  forceCollision: () => run.forceCollision(),
-  // Injects a friend into Gary's lane and lets the normal collision path
-  // collect it, so the hook exercises the real pickup rule, not the store.
-  spawnFriend: () => run.spawnFriend(),
-  entityCount: () => run.traffic.activeCount + run.friends.activeCount,
-  nearestAhead: () => {
-    let nearest: { distance: number; lane: number } | null = null;
-    // Traffic only: this is the "what am I about to hit" readout tests steer
-    // by. A friend is something to aim FOR, so folding it in here would make
-    // the dodging bots swerve away from the reward.
-    for (const e of run.traffic.entities) {
-      if (!e.active || e.z > 0) continue;
-      const distance = -e.z;
-      if (nearest === null || distance < nearest.distance) {
-        nearest = { distance, lane: e.lane };
-      }
-    }
-    return nearest;
-  },
-  nearMissCount: () => run.nearMisses,
-  congaLength: () => run.conga.length,
-  highScore: () => highScore,
-  particleCount: () => fx.liveCount,
-  dying: () => deathTime !== null && deathTime < DEATH_DURATION,
-};
-installTestApi(store, () => hasRenderedFrame, hooks);
 
 const container = document.getElementById('app');
 if (!container) {
@@ -179,276 +110,198 @@ const camera = new PerspectiveCamera(
   400,
 );
 
-/**
- * Two camera rigs, eased between on state change (the one committed idea the
- * whole screen is built around): the menu is a low front-quarter "hero" shot
- * that frames Gary off to the right of the docked card — you meet the character
- * before you play him — and starting a run swings the camera up and back into
- * the over-the-shoulder chase pose. `start()` is therefore a camera move, not
- * just a card swap.
- */
-const MENU_RIG = {
-  pos: { x: -2.9, y: 1.35, z: 4.3 },
-  look: { x: 0.55, y: 0.95, z: -1.5 },
-} as const;
-const CHASE_RIG = {
-  pos: { x: 0, y: 3, z: 7 },
-  look: { x: 0, y: 1.1, z: -6 },
-} as const;
-/**
- * The wreck shot. The chase rig aims nineteen units up an empty road, which is
- * exactly the wrong place to be looking at the moment the road stops — the
- * punchline of the whole game is a flattened cone lying at z=0, and the default
- * pose puts it below the bottom of the frame.
- *
- * So game-over swings down and around into a low front-quarter shot that
- * mirrors the menu's hero framing: card docked left, Gary on the right. Meeting
- * him standing proud and leaving him flat on his back is the SAME composition,
- * and the only thing that changed is what happened to him. Offsets are relative
- * to his crash X so the shot composes from whichever lane he died in.
- */
-const WRECK_RIG = {
-  // Gary settles at +0.6 yaw, so the payoff camera crosses to his front-right;
-  // the card remains left-docked while his eyes, not his back, carry the joke.
-  pos: { x: 3.0, y: 1.5, z: 6.2 },
-  look: { x: 0.0, y: 0.35, z: 3.3 },
-} as const;
+// Quality is decided once from the device, because `antialias` is fixed at
+// context creation and cannot be changed later.
+const quality = qualitySettings(detectQuality(readDeviceProfile()));
 
-/**
- * Ceiling on how far the conga line is allowed to pull the chase camera back
- * (world units of tail). Beyond this the road ahead would start to shrink
- * faster than the tail grows, trading the thing you have to react to for the
- * thing you already earned — a bad deal at any convoy length.
- */
-const CONGA_FRAME_MAX = 6.5;
-
-/**
- * How the convoy reframes the chase shot, per world unit of tail.
- *
- * The LIFT matters more than the pull-back, and that is the whole trick. From
- * the default low chase pose you are looking straight down the line, so every
- * cone hides behind the one in front and a six-friend convoy reads as one lumpy
- * mass. Rising as it grows turns the same tail into a legible queue of distinct
- * characters — which is the reward you actually earned. Pulling back alone just
- * makes the pile smaller.
- */
-const CONGA_LIFT = 0.28;
-/**
- * Deliberately GREATER than 1: the tail grows toward the camera, so retreating
- * one-for-one only ever holds the newest arrival exactly at the near clip of
- * the frame — and the newest arrival is the one the player just earned and most
- * wants to see. Over-retreating buys the margin that keeps them in shot.
- */
-const CONGA_PULLBACK = 1.3;
-const CONGA_AIM_BACK = 0.75;
-
-camera.position.set(MENU_RIG.pos.x, MENU_RIG.pos.y, MENU_RIG.pos.z);
-camera.lookAt(MENU_RIG.look.x, MENU_RIG.look.y, MENU_RIG.look.z);
-
-/** Where the camera currently aims; damped toward the active rig's target. */
-const lookAt: { x: number; y: number; z: number } = {
-  x: MENU_RIG.look.x,
-  y: MENU_RIG.look.y,
-  z: MENU_RIG.look.z,
-};
-
-const renderer = new WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new WebGLRenderer({ antialias: quality.antialias });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(BG, 1);
 renderer.toneMapping = ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 container.appendChild(renderer.domElement);
 
-// Lighting — a cool night sky with a warm key, so Gary's orange pops.
+/** Every frame goes through the pipeline, never through the renderer directly,
+ *  so post-processing can land later without touching shell logic. */
+const pipeline = createPipeline(renderer, quality);
+
+// The only lighting the shell owns: a neutral cool fill every game inherits.
+// Anything characterful (a warm key, a hero light) belongs to a runtime.
 scene.add(new HemisphereLight(0x5566aa, 0x0a0a12, 0.7));
 scene.add(new AmbientLight(0xffffff, 0.25));
-const KEY_LIGHT_BASE = 1.5;
-const key = new DirectionalLight(0xfff1e0, KEY_LIGHT_BASE);
-key.position.set(4, 8, 6);
-scene.add(key);
-const RIM_LIGHT_BASE = 0.6;
-const rim = new DirectionalLight(0x6688ff, RIM_LIGHT_BASE);
-rim.position.set(-5, 4, -6);
-scene.add(rim);
 
-// Menu-only hero light, from the front-left where the hero camera sits, so Gary
-// is modelled and lit in his portrait. Its intensity is cross-faded with the
-// camera rig in the loop, so it never flattens the in-play road lighting.
-const HERO_LIGHT_MAX = 1.5;
-const heroLight = new DirectionalLight(0xffd9a8, HERO_LIGHT_MAX);
-heroLight.position.set(-4, 3, 5);
-scene.add(heroLight);
+// ── The cabinet ─────────────────────────────────────────────────────────────
 
-// Dark ground beyond the road so the horizon reads solid under the fog.
-const ground = new Mesh(
-  new PlaneGeometry(400, 500),
-  new MeshStandardMaterial({ color: 0x0c0c16, roughness: 1 }),
-);
-ground.rotation.x = -Math.PI / 2;
-ground.position.set(0, -0.06, -120);
-scene.add(ground);
+const registry = new RuntimeRegistry(scene);
 
-// The scrolling highway.
-const road = new Road();
-scene.add(road.group);
+const highway = new HighwayRuntime({
+  store,
+  audio,
+  telemetry: {
+    pulse: () => hud.pulse(),
+    collected: (pickup) => hud.collected(pickup),
+  },
+});
+registry.register(highway);
+registry.register(createTowerRuntime());
+registry.register(createConeballRuntime());
+registry.register(createRoyalRollRuntime());
 
-// Oncoming traffic — instanced meshes driven entirely by run.traffic entities.
-const traffic = new Traffic();
-scene.add(traffic.group);
+/** The runtime currently on screen. Never null after the boot activation. */
+function active() {
+  const runtime = registry.current;
+  if (!runtime) throw new Error('No active runtime');
+  return runtime;
+}
 
-// The cast: collectible cones on the road plus the conga line behind Gary.
-// Both are placed straight from the simulation (run.friends / run.conga).
-const friends = new Friends();
-scene.add(friends.group);
+// ── Store reactions the shell owns ──────────────────────────────────────────
+// Registered BEFORE the HUD subscribes, and that order is load-bearing:
+// listeners fire in subscription order, so the record has to be banked and
+// handed to the HUD before the HUD renders the game-over card — otherwise the
+// card would headline "Wrecked!" on the very run that set a new best.
 
-// Particles ride above the road, below everything else.
-scene.add(fx.group);
-
-// Gary — stays at world z=0; the road scrolls past him. Lane drives his X.
-// `root` is positioned/rotated; `body` carries the squash-and-stretch scale.
-const gary = createGary();
-gary.root.position.set(laneToX(store.getState().lane), 0, 0);
-scene.add(gary.root);
-
-// Render-local feel state. It reacts to store transitions without becoming game
-// state: visual speed coasts, while the death animation and trauma decay
-// independently.
-let visualSpeed = store.getState().speed;
-let previousState = store.getState();
+let previousStatus = store.getState().status;
 store.subscribe((state) => {
-  if (state.status !== previousState.status) {
-    if (state.status === 'playing' || state.status === 'menu') {
-      // Both start/restart and an explicit store.reset() clear simulation-owned
-      // state. Otherwise reset() would leave frozen traffic visible on the menu.
-      run.reset();
-      traffic.sync(run.traffic.entities);
-      // The conga line is simulation-owned too: reset() empties it, and this
-      // clears the meshes in the same frame so no ghost cones survive a restart.
-      friends.clear();
-      // Same rule for the fx: last run's crash debris must not be hanging in
-      // the air over a fresh road.
-      fx.clear();
-      gary.root.position.set(laneToX(state.lane), 0, 0);
-      gary.root.rotation.set(0, 0, 0);
-      gary.body.scale.set(1, 1, 1);
-      visualSpeed = 0;
-      trauma = 0;
-      deathTime = null;
-      recordAnnounced = false;
-      if (state.status === 'playing') audio.start();
-    }
-    if (state.status === 'gameover') {
-      // The comedic death starts here and the loop plays it out; the crash cue,
-      // the debris and the biggest shake in the game all land on the same frame
-      // as the squash, because an impact that isn't simultaneous isn't an impact.
-      deathTime = 0;
-      deathX = gary.root.position.x;
-      audio.crash();
-      trauma = addTrauma(trauma, CRASH_TRAUMA);
-      if (!reducedMotion) fx.crash(gary.root.position.x);
-
-      // Bank the run. `submitHighScore` writes only on a genuine improvement.
-      const result = submitHighScore(storage, state.score, highScore);
-      highScore = result.best;
-      hud.setHighScore(highScore, result.isNew);
-      if (result.isNew && !recordAnnounced) audio.highScore();
-    }
+  if (state.status === previousStatus) return;
+  if (state.status === 'playing') recordAnnounced = false;
+  if (state.status === 'gameover') {
+    // Bank the run against THIS game's record. `submitGameHighScore` writes
+    // only on a genuine improvement, and only under that game's own key.
+    const result = submitGameHighScore(
+      storage,
+      state.selectedGame,
+      state.score,
+      highScores[state.selectedGame],
+    );
+    highScores[state.selectedGame] = result.best;
+    hud.setHighScore(result.best, result.isNew);
+    hud.setHighScores(highScores);
+    if (result.isNew && !recordAnnounced) audio.highScore();
   }
-  if (state.status === 'playing' && state.lane !== previousState.lane) {
-    audio.lane();
-    // Dust kicked off the lane he is leaving — the visual echo of the input.
-    if (!reducedMotion) {
-      fx.hop(gary.root.position.x, Math.sign(state.lane - previousState.lane));
-    }
-  }
-  previousState = state;
+  previousStatus = state.status;
 });
 
-// DOM overlay (menu / HUD / gameover / loading skeleton).
-const hud = new Hud(
-  store,
-  () => audio.unlock(),
-  () => {
+// ── The HUD shell ───────────────────────────────────────────────────────────
+
+const hud = new Hud(store, {
+  onUserGesture: () => audio.unlock(),
+  onToggleSound: () => {
     const muted = audio.toggleMute();
     if (!muted) audio.lane(); // audible confirmation that sound is back
     return muted;
   },
-);
-hud.setHighScore(highScore);
+  // Highlighting a card swings the live 3D behind the panel to that game, which
+  // is the whole idea of the select screen: you are choosing a running cabinet,
+  // not browsing a catalogue.
+  onSelectGame: (id) => selectGame(id),
+  onLaunch: (id) => launch(id),
+  onBackToMenu: () => store.returnToMenu(),
+});
+hud.setHighScores(highScores);
+hud.setHighScore(selectedBest());
 hud.setMuted(audio.muted);
 
-function onResize(): void {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+/** Point the cabinet at a game: store first, then the scene follows it. */
+function selectGame(id: GameId): void {
+  store.selectGame(id);
+  if (store.getState().selectedGame !== id) return; // refused (not on the menu)
+  registry.activate(id);
+  hud.setHighScore(highScores[id]);
 }
-window.addEventListener('resize', onResize);
-// iOS Safari shrinks/grows the layout viewport when the URL bar slides away and
-// on orientation flips. `resize` covers most of it, but the visualViewport and
-// orientationchange events are the reliable signals on iOS, so mirror onResize
-// onto them too — otherwise the canvas can end up letterboxed or overscrolled.
-window.visualViewport?.addEventListener('resize', onResize);
-window.addEventListener('orientationchange', onResize);
+
+/**
+ * Open a game from the menu. A slot that isn't built yet is selected and shown
+ * — the player still gets to look at it — but never started, because there is
+ * no run to have.
+ */
+function launch(id: GameId): void {
+  selectGame(id);
+  if (!gameEntry(id).playable) return;
+  audio.unlock();
+  store.start();
+}
+
+registry.activate(store.getState().selectedGame);
+hud.setSnapshot(active().snapshot());
+
+// ── Deterministic test hooks ────────────────────────────────────────────────
+// Names/signatures are pinned in testApi.ts; the concrete behaviour lives here.
+// Every one goes through real game logic, never through store poking.
+const hooks: GaryTestHooks = {
+  start: () => launch(store.getState().selectedGame),
+  setLane: (n) => store.setLane(n),
+  // Goes through the real collision predicate (Run.forceCollision injects a
+  // vehicle onto Gary), so the e2e hook exercises collision, not just state.
+  forceCollision: () => highway.run.forceCollision(),
+  // Injects a friend into Gary's lane and lets the normal collision path
+  // collect it, so the hook exercises the real pickup rule, not the store.
+  spawnFriend: () => highway.run.spawnFriend(),
+  entityCount: () => active().snapshot().entities,
+  nearestAhead: () => highway.nearestAhead,
+  nearMissCount: () => highway.run.nearMisses,
+  congaLength: () => highway.run.conga.length,
+  highScore: () => selectedBest(),
+  highScores: () => ({ ...highScores }),
+  particleCount: () => highway.particleCount,
+  dying: () => highway.dying,
+  snapshot: () => active().snapshot(),
+  selectGame: (id) => selectGame(id),
+  input: (action) => dispatch(action),
+  backToMenu: () => store.returnToMenu(),
+  command: (name, payload) => active().handleCommand?.(name, payload) ?? false,
+};
+installTestApi(store, () => hasRenderedFrame, hooks);
 
 // ── Input: explicit user intent only (never the loop) ───────────────────────
-// Both input devices funnel through these two intents so touch never forks the
-// game logic — a swipe is a keypress by another name.
+// Every device is normalized to an ArcadeAction by the pure mapping in
+// game/arcade/input.ts, then routed by STATUS. The shell contains no key names
+// and no game rules; it only delivers the verb to whoever owns it right now.
 
-/** Move Gary one lane in `delta` (-1 left / +1 right). The store clamps range. */
-function changeLane(delta: number): void {
-  const { status, lane } = store.getState();
-  if (status === 'playing') audio.unlock();
-  store.setLane(lane + delta);
-}
-
-/** The Space/Enter/tap intent: begin or restart a run, but never mid-play. */
-function startRun(): void {
-  if (store.getState().status !== 'playing') {
-    audio.unlock();
-    store.start();
+function dispatch(action: ArcadeAction): void {
+  const status = store.getState().status;
+  switch (routeAction(status, action)) {
+    case 'menu':
+      hud.select.handleAction(action);
+      break;
+    case 'runtime':
+      active().handleInput(action);
+      break;
+    case 'start':
+      audio.unlock();
+      store.start();
+      break;
+    case 'back':
+      store.returnToMenu();
+      break;
+    case 'ignore':
+      break;
   }
 }
 
 window.addEventListener('keydown', (e) => {
-  switch (e.key) {
-    case 'ArrowLeft':
-    case 'a':
-    case 'A':
-      changeLane(-1);
-      e.preventDefault();
-      break;
-    case 'ArrowRight':
-    case 'd':
-    case 'D':
-      changeLane(1);
-      e.preventDefault();
-      break;
-    case ' ':
-    case 'Enter':
-      startRun();
-      e.preventDefault();
-      break;
-    default:
-      break;
-  }
+  const action = actionForKey(e.key);
+  if (action === null) return;
+  // A focused card is a native <button>: the browser already turns Space and
+  // Enter into a `click` on it, and the grid owns its own arrow handling. If we
+  // also dispatched here, one keystroke would fire twice.
+  if (hud.select.ownsEvent(e.target)) return;
+  dispatch(action);
+  e.preventDefault();
 });
 
-// ── Touch: iPhone / iPad. Swipe left/right = lane change, tap = start/restart ─
+// ── Touch: iPhone / iPad. Swipe = a direction, tap = the primary verb ────────
 // Handlers sit on the canvas (the play area). The HUD overlay is
 // pointer-events:none except its own buttons, so a touch anywhere that isn't a
-// button falls through to here, while the mute/start buttons keep their taps.
+// button falls through to here, while the buttons keep their taps.
 // touch-action:none on the canvas (see index.html) stops the browser hijacking
 // these gestures for scroll/zoom, so we never need preventDefault — the
 // listeners stay passive.
-const SWIPE_THRESHOLD = 34; // px of horizontal travel that commits a lane change
-const TAP_SLOP = 10; // px of travel under which a gesture still counts as a tap
-
 let touchId: number | null = null;
 let touchStartX = 0;
 let touchStartY = 0;
-let touchMoved = false; // travelled past TAP_SLOP -> it's a swipe, not a tap
-let laneSwiped = false; // a lane change already fired this gesture
+let touchMoved = false; // travelled past the tap slop -> a swipe, not a tap
+let swiped = false; // a direction already fired this gesture
 
 function trackedTouch(list: TouchList): Touch | null {
   for (let i = 0; i < list.length; i++) {
@@ -468,7 +321,7 @@ canvas.addEventListener(
     touchStartX = t.clientX;
     touchStartY = t.clientY;
     touchMoved = false;
-    laneSwiped = false;
+    swiped = false;
   },
   { passive: true },
 );
@@ -481,32 +334,30 @@ canvas.addEventListener(
     if (!t) return;
     const dx = t.clientX - touchStartX;
     const dy = t.clientY - touchStartY;
-    if (Math.abs(dx) > TAP_SLOP || Math.abs(dy) > TAP_SLOP) touchMoved = true;
-    // One lane change per gesture, and only when the motion is dominantly
-    // horizontal, so a vertical scroll-style drag never nudges Gary sideways.
-    if (
-      !laneSwiped &&
-      Math.abs(dx) >= SWIPE_THRESHOLD &&
-      Math.abs(dx) > Math.abs(dy)
-    ) {
-      changeLane(Math.sign(dx));
-      laneSwiped = true;
-    }
+    if (!isTapTravel(dx, dy)) touchMoved = true;
+    // One direction per gesture, resolved on the dominant axis, so a
+    // scroll-shaped drag never nudges the player sideways.
+    if (swiped) return;
+    const action = actionForSwipe(dx, dy);
+    if (action === null) return;
+    dispatch(action);
+    swiped = true;
   },
   { passive: true },
 );
 
-function endTouch(e: TouchEvent): void {
-  if (touchId === null) return;
-  const t = trackedTouch(e.changedTouches);
-  if (!t) return;
-  // A tap (no meaningful travel, no lane swipe) is the Space/Enter intent:
-  // start on the menu, restart on game-over, nothing mid-run.
-  if (!touchMoved && !laneSwiped) startRun();
-  touchId = null;
-}
-
-canvas.addEventListener('touchend', endTouch, { passive: true });
+canvas.addEventListener(
+  'touchend',
+  (e) => {
+    if (touchId === null) return;
+    const t = trackedTouch(e.changedTouches);
+    if (!t) return;
+    // A tap (no meaningful travel, no swipe) is the Space/Enter intent.
+    if (!touchMoved && !swiped) dispatch(actionForTap());
+    touchId = null;
+  },
+  { passive: true },
+);
 canvas.addEventListener(
   'touchcancel',
   () => {
@@ -515,229 +366,98 @@ canvas.addEventListener(
   { passive: true },
 );
 
+// ── Resize ──────────────────────────────────────────────────────────────────
+
+function onResize(): void {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  pipeline.resize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', onResize);
+// iOS Safari shrinks/grows the layout viewport when the URL bar slides away and
+// on orientation flips. `resize` covers most of it, but the visualViewport and
+// orientationchange events are the reliable signals on iOS, so mirror onResize
+// onto them too — otherwise the canvas can end up letterboxed or overscrolled.
+window.visualViewport?.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', onResize);
+
 // ── Render loop ─────────────────────────────────────────────────────────────
+
+/** Where the camera currently aims; damped toward the active runtime's pose. */
+const lookAt = { x: 0, y: 1, z: 0 };
+{
+  // Compose the very first frame from the active runtime's pose rather than
+  // easing in from an arbitrary origin, so boot is not a swoop from nowhere.
+  const pose = active().cameraTarget();
+  camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+  lookAt.x = pose.look.x;
+  lookAt.y = pose.look.y;
+  lookAt.z = pose.look.z;
+  camera.lookAt(lookAt.x, lookAt.y, lookAt.z);
+}
+
 let lastTime = performance.now();
 let time = 0;
 
-/** Bound slow frames so traffic cannot jump an entire reaction window before
- * input is observed. A modest catch-up allowance avoids severe time dilation
- * under browser contention while preserving a dodgeable world at low FPS. */
+/** Bound slow frames so a game cannot jump an entire reaction window before
+ *  input is observed. A modest catch-up allowance avoids severe time dilation
+ *  under browser contention while preserving a playable world at low FPS. */
 const MAX_FRAME_DT = 0.1;
-const SIMULATION_STEP = 0.05;
 
 function frame(now: number): void {
   const dt = Math.min((now - lastTime) / 1000, MAX_FRAME_DT);
   lastTime = now;
   time += dt;
 
-  // Catch the simulation up before drawing. Gary advances in the same small
-  // steps as traffic so a low-fps late dodge follows the path seen at 60fps
-  // instead of either teleporting clear or remaining frozen for a whole frame.
-  let remaining = dt;
-  while (remaining > 0) {
-    const step = Math.min(remaining, SIMULATION_STEP);
-    const targetX = laneToX(store.getState().lane);
-    gary.root.position.x = MathUtils.damp(gary.root.position.x, targetX, 12, step);
-    run.setGaryX(gary.root.position.x);
-    run.update(step);
-    remaining -= step;
-  }
-  traffic.sync(run.traffic.entities);
-  friends.syncField(run.friends.entities, time, reducedMotion);
-  friends.syncConga(run.conga.members, time, reducedMotion);
+  const runtime = active();
+  runtime.update({ dt, time, reducedMotion });
+
+  const snapshot = runtime.snapshot();
+  hud.setSnapshot(snapshot);
 
   const s = store.getState();
-  const menuFraming = s.status === 'menu';
+  const best = highScores[s.selectedGame];
 
   // Passing your best is a mid-run event, not a game-over reveal: announce it
   // the moment it happens, so the last stretch of the run is played knowing it.
   if (
     s.status === 'playing' &&
     !recordAnnounced &&
-    highScore > 0 &&
-    s.score > highScore
+    best > 0 &&
+    snapshot.score > best
   ) {
     recordAnnounced = true;
-    hud.recordBroken(s.score);
+    hud.recordBroken(snapshot.score);
     audio.highScore();
   }
 
-  visualSpeed = reducedMotion
-    ? s.speed
-    : MathUtils.damp(
-        visualSpeed,
-        s.speed,
-        s.status === 'gameover' ? 2.2 : 1.6,
-        dt,
-      );
-  road.update(dt, visualSpeed);
-  // Event bursts need the road frame even when recurring dust is disabled (for
-  // example by reduced-motion preferences).
-  fx.setRoadSpeed(visualSpeed);
+  // Camera: the runtime says where it wants to be, the shell damps toward it.
+  // Because every pose is damped, a state change (or a game change) reads as a
+  // continuous camera move rather than a cut.
+  const pose = runtime.cameraTarget();
+  const lambda = reducedMotion ? 1e3 : pose.lambda;
+  camera.position.x = MathUtils.damp(camera.position.x, pose.position.x, lambda, dt);
+  camera.position.y = MathUtils.damp(camera.position.y, pose.position.y, lambda, dt);
+  camera.position.z = MathUtils.damp(camera.position.z, pose.position.z, lambda, dt);
 
-  // Road dust under Gary while the road is moving. Emitted on a distance
-  // cadence inside `fx`, so the plume thickens with speed instead of thinning.
-  if (!reducedMotion && s.status === 'playing') {
-    fx.road(dt, gary.root.position.x, visualSpeed);
-  } else if (!reducedMotion && s.status === 'gameover') {
-    // The screen players linger on keeps breathing after the impact burst dies:
-    // one slow curl off the wreck, sparse enough to preserve the still payoff.
-    fx.smoulder(dt, gary.root.position.x);
-  }
-  fx.update(dt);
-
-  // Gary's X already advanced with the simulation substeps above; bank the
-  // rendered cone toward the remainder of that same lane change.
-  const targetX = laneToX(s.lane);
-
-  if (deathTime !== null) {
-    // ── The comedic death ──────────────────────────────────────────────────
-    // Every number comes from the pure `deathPose(t)` beat sheet; this only
-    // applies it. Reduced motion jumps straight to the settled pose: Gary is
-    // still visibly wrecked (that's information), he just doesn't bounce.
-    deathTime += dt;
-    const pose = deathPose(reducedMotion ? DEATH_DURATION : deathTime);
-    gary.body.scale.set(pose.scaleX, pose.scaleY, pose.scaleZ);
-    gary.root.position.set(deathX + pose.x, pose.y, pose.z);
-    gary.root.rotation.set(-pose.tip, pose.spin, 0);
-  } else {
-    gary.body.scale.set(1, 1, 1);
-    gary.root.rotation.z = MathUtils.damp(
-      gary.root.rotation.z,
-      (targetX - gary.root.position.x) * 0.5,
-      9,
-      dt,
-    );
-    gary.root.rotation.x = MathUtils.damp(gary.root.rotation.x, 0, 7, dt);
-    gary.root.position.y = reducedMotion
-      ? 0
-      : 0.04 + Math.sin(time * 2.4) * 0.04;
-    gary.root.rotation.y = MathUtils.damp(
-      gary.root.rotation.y,
-      menuFraming ? -0.42 : 0,
-      reducedMotion ? 1e3 : 3.2,
-      dt,
-    );
-  }
-
-  // Camera: pick the rig for the current state, then damp position AND aim
-  // toward it. Menu is the hero shot, playing is the chase pose, game-over
-  // swings down into the wreck shot. Because all three are damped, every
-  // transition reads as a continuous camera move rather than a cut — and the
-  // crash's move is the payoff, craning down to look at what's left of him.
-  const wreckFraming = s.status === 'gameover';
-  const rig = menuFraming ? MENU_RIG : wreckFraming ? WRECK_RIG : CHASE_RIG;
-  // Composed rigs (hero, wreck) hold their framing; only the chase pose tracks
-  // the lane. The wreck rig offsets from where Gary actually came to rest, so
-  // the shot composes identically whichever lane he died in.
-  const wreckX = deathX;
-  const camTargetX = menuFraming
-    ? rig.pos.x
-    : wreckFraming
-      ? rig.pos.x + wreckX
-      : rig.pos.x + targetX * 0.55;
-  const lookTargetX = menuFraming
-    ? rig.look.x
-    : wreckFraming
-      ? rig.look.x + wreckX
-      : gary.root.position.x * 0.4;
-  // Reduced motion: snap to the rig instead of sweeping the viewport.
-  const camLambda = reducedMotion ? 1e3 : 3.2;
-
-  // The convoy earns its own framing: as the conga line grows, the chase rig
-  // eases back and up so the tail stays in shot instead of trailing off behind
-  // the camera. The reward literally changes the composition — the longer your
-  // line, the wider the shot, which is the whole fantasy made visible. Damped
-  // like every other rig move, so it reads as a slow pull-back, never a cut.
-  // Composed rigs opt out: they are framing ONE cone, deliberately.
-  const tail =
-    menuFraming || wreckFraming
-      ? 0
-      : Math.min(run.conga.tailLength, CONGA_FRAME_MAX);
-  camera.position.x = MathUtils.damp(camera.position.x, camTargetX, camLambda, dt);
-  camera.position.y = MathUtils.damp(
-    camera.position.y,
-    rig.pos.y + tail * CONGA_LIFT,
-    camLambda,
-    dt,
-  );
-  camera.position.z = MathUtils.damp(
-    camera.position.z,
-    rig.pos.z + tail * CONGA_PULLBACK,
-    camLambda,
-    dt,
-  );
-
-  // Camera shake, applied AFTER the rig damping so a knock never fights the
-  // framing logic — it displaces the composed shot rather than becoming a
-  // target the damping then chases. Trauma-based (see game/fx/shake.ts): a
-  // near miss is a nudge, a crash is a lurch, and both settle rather than stop.
-  trauma = decayTrauma(trauma, dt);
-  const shake = reducedMotion || trauma <= 0 ? null : shakeOffset(trauma, time);
+  // Shake is applied AFTER the damping so a knock never fights the framing
+  // logic — it displaces the composed shot rather than becoming a target the
+  // damping then chases.
+  const shake = reducedMotion ? null : pose.shake;
   if (shake) {
     camera.position.x += shake.x;
     camera.position.y += shake.y;
   }
 
-  lookAt.x = MathUtils.damp(lookAt.x, lookTargetX, camLambda, dt);
-  // As the camera rises for a long convoy, the aim drops with it: otherwise the
-  // extra height would just tilt the shot up into empty sky and push the tail
-  // off the bottom of the frame. Together they read as craning up over the line.
-  lookAt.y = MathUtils.damp(
-    lookAt.y,
-    rig.look.y - tail * CONGA_LIFT * 0.5,
-    camLambda,
-    dt,
-  );
-  // The aim point also drifts back toward Gary as the convoy grows. Raising and
-  // retreating the camera alone still aims 19 units up the road, which puts the
-  // near end of a long tail below the bottom of the frame — the friends closest
-  // to Gary, i.e. the ones that just joined, would be the ones you cannot see.
-  lookAt.z = MathUtils.damp(
-    lookAt.z,
-    rig.look.z + tail * CONGA_AIM_BACK,
-    camLambda,
-    dt,
-  );
+  lookAt.x = MathUtils.damp(lookAt.x, pose.look.x, lambda, dt);
+  lookAt.y = MathUtils.damp(lookAt.y, pose.look.y, lambda, dt);
+  lookAt.z = MathUtils.damp(lookAt.z, pose.look.z, lambda, dt);
   camera.lookAt(lookAt.x, lookAt.y, lookAt.z);
   // Roll goes on AFTER lookAt (which overwrites the whole orientation), so the
   // horizon tilts with the shake without the camera losing its aim point.
   if (shake) camera.rotateZ(shake.roll);
 
-  // Cross-fade the hero light with the same easing as the rig move. It sits
-  // front-left, which is where BOTH composed rigs sit — so it models Gary in
-  // his portrait and again in his wreck, and stays out of the road lighting
-  // while a run is actually under way. Dimmer on the wreck: he's had a day.
-  heroLight.intensity = MathUtils.damp(
-    heroLight.intensity,
-    menuFraming || wreckFraming ? HERO_LIGHT_MAX : 0,
-    camLambda,
-    dt,
-  );
-
-  // Near miss: a brief warm bloom on the key light and a small camera kick, so
-  // squeezing past a truck is felt in the scene and not only in the HUD.
-  // Pickup: a warmer, slower bloom than the near-miss kick, so collecting a
-  // friend feels like the road lighting up rather than a hazard whipping past.
-  if (friendFlash > 0.001) {
-    friendFlash *= Math.exp(-3.4 * dt);
-  } else {
-    friendFlash = 0;
-  }
-
-  if (nearMissFlash > 0.001) {
-    nearMissFlash *= Math.exp(-7 * dt);
-    if (!reducedMotion) camera.position.y += nearMissFlash * 0.06;
-  } else {
-    nearMissFlash = 0;
-  }
-  key.intensity =
-    KEY_LIGHT_BASE + nearMissFlash * 1.5 + friendFlash * 1.1;
-  // The pickup also warms the rim light, so the whole convoy is momentarily
-  // outlined — the tail is what you just made bigger, so the tail should glow.
-  rim.intensity = RIM_LIGHT_BASE + friendFlash * 1.4;
-
-  renderer.render(scene, camera);
+  pipeline.render(scene, camera);
 
   if (!hasRenderedFrame) {
     hasRenderedFrame = true;

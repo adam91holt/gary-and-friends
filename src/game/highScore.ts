@@ -7,10 +7,32 @@
  * while the only thing that touches `localStorage` is a tiny adapter the
  * renderer supplies. No `window` reference lives in this file, so it stays on
  * the game-logic side of the seam.
+ *
+ * ── Per-game bests ──────────────────────────────────────────────────────────
+ * The cabinet keeps one persisted best PER GAME, under its own key. The highway
+ * deliberately keeps the original un-namespaced `gary.highScore.v1`, so a
+ * player who has been playing since before the arcade existed keeps their
+ * record across the upgrade rather than being silently reset to zero.
+ *
+ * The un-suffixed `loadHighScore` / `submitHighScore` remain as highway-shaped
+ * compatibility wrappers over the per-game functions.
  */
+import { type GameId } from './arcade/contracts.ts';
 
-/** Where the best score is kept. Versioned so a future shape change is clean. */
+/** Where the HIGHWAY's best is kept. Versioned so a shape change is clean. */
 export const HIGH_SCORE_KEY = 'gary.highScore.v1';
+
+/**
+ * The storage key for a game's best.
+ *
+ * `highway` is special-cased to the legacy key on purpose — see the file
+ * header. Everything else is namespaced by id, in the same `gary.highScore.*`
+ * family and at the same `.v1` version, so the whole set migrates together if
+ * the shape ever changes.
+ */
+export function highScoreKey(game: GameId): string {
+  return game === 'highway' ? HIGH_SCORE_KEY : `gary.highScore.${game}.v1`;
+}
 
 /** The minimum surface of `localStorage` this module needs. */
 export interface StoragePort {
@@ -61,35 +83,72 @@ export function resolveHighScore(score: number, best: number): HighScoreResult {
 }
 
 /**
- * Read the stored best. Never throws: private-mode / disabled-storage browsers
- * make `localStorage` access itself throw, and a game must still be playable
- * there — it just won't remember.
+ * Read one game's stored best. Never throws: private-mode / disabled-storage
+ * browsers make `localStorage` access itself throw, and a game must still be
+ * playable there — it just won't remember.
  */
-export function loadHighScore(storage: StoragePort | null): number {
+export function loadGameHighScore(
+  storage: StoragePort | null,
+  game: GameId,
+): number {
   if (storage === null) return 0;
   try {
-    return parseHighScore(storage.getItem(HIGH_SCORE_KEY));
+    return parseHighScore(storage.getItem(highScoreKey(game)));
   } catch {
     return 0;
   }
 }
 
 /**
- * Persist `score` if it beats `best`, returning the resolved outcome. Same
- * never-throws contract as `loadHighScore`: a failed write degrades to an
- * in-memory best for the session rather than ending the run with an exception.
+ * Persist `score` under `game` if it beats `best`, returning the resolved
+ * outcome. Same never-throws contract as `loadGameHighScore`: a failed write
+ * degrades to an in-memory best for the session rather than ending the run with
+ * an exception.
  */
-export function submitHighScore(
+export function submitGameHighScore(
   storage: StoragePort | null,
+  game: GameId,
   score: number,
   best: number,
 ): HighScoreResult {
   const result = resolveHighScore(score, best);
   if (!result.isNew || storage === null) return result;
   try {
-    storage.setItem(HIGH_SCORE_KEY, String(result.best));
+    storage.setItem(highScoreKey(game), String(result.best));
   } catch {
     // Storage unavailable — keep the session best, forget it on reload.
   }
   return result;
+}
+
+/**
+ * Every game's best, as a record. This is what the select grid draws on the
+ * cards, and what `window.__GARY__.highScores` projects — one read of storage,
+ * one shape, so two surfaces can never disagree about a number.
+ */
+export function loadAllHighScores(
+  storage: StoragePort | null,
+  games: readonly GameId[],
+): Record<GameId, number> {
+  const out = {} as Record<GameId, number>;
+  for (const game of games) out[game] = loadGameHighScore(storage, game);
+  return out;
+}
+
+/**
+ * Read the highway's best. Compatibility wrapper over `loadGameHighScore` —
+ * kept because it is the un-namespaced original and the shape every
+ * pre-arcade caller and test expects.
+ */
+export function loadHighScore(storage: StoragePort | null): number {
+  return loadGameHighScore(storage, 'highway');
+}
+
+/** Persist a highway run. Compatibility wrapper over `submitGameHighScore`. */
+export function submitHighScore(
+  storage: StoragePort | null,
+  score: number,
+  best: number,
+): HighScoreResult {
+  return submitGameHighScore(storage, 'highway', score, best);
 }

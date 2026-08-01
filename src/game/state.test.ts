@@ -15,6 +15,7 @@ describe('GameStore', () => {
       lane: CENTER_LANE,
       speed: 0,
       friends: 0,
+      selectedGame: 'highway',
     });
   });
 
@@ -52,6 +53,7 @@ describe('GameStore', () => {
       lane: CENTER_LANE,
       speed: 0,
       friends: 0,
+      selectedGame: 'highway',
     });
 
     store.start();
@@ -108,6 +110,7 @@ describe('GameStore', () => {
       lane: CENTER_LANE,
       speed: BASE_SPEED,
       friends: 0,
+      selectedGame: 'highway',
     });
   });
 
@@ -123,6 +126,7 @@ describe('GameStore', () => {
       lane: CENTER_LANE,
       speed: 0,
       friends: 0,
+      selectedGame: 'highway',
     });
   });
 
@@ -132,6 +136,112 @@ describe('GameStore', () => {
     store.addScore(7);
     store.start();
     expect(store.getState().score).toBe(7);
+  });
+
+  it('boots pointed at the highway', () => {
+    expect(new GameStore().getState().selectedGame).toBe('highway');
+  });
+
+  it('selectGame switches the cabinet from the menu', () => {
+    const store = new GameStore();
+    store.selectGame('coneball');
+    expect(store.getState().selectedGame).toBe('coneball');
+    // Nothing else moved: selection is not a run.
+    expect(store.getState().status).toBe('menu');
+    expect(store.getState().speed).toBe(0);
+  });
+
+  it('selectGame is refused while playing and at gameover', () => {
+    const store = new GameStore();
+    store.selectGame('tower');
+    store.start();
+    store.selectGame('coneball');
+    expect(store.getState().selectedGame).toBe('tower');
+
+    store.gameOver();
+    store.selectGame('royal-roll');
+    expect(store.getState().selectedGame).toBe('tower');
+  });
+
+  it('start() carries the selected game into the run', () => {
+    const store = new GameStore();
+    store.selectGame('royal-roll');
+    store.start();
+    expect(store.getState().selectedGame).toBe('royal-roll');
+    expect(store.getState().status).toBe('playing');
+  });
+
+  it('keeps highway-only telemetry idle for non-highway runs', () => {
+    const store = new GameStore();
+    store.selectGame('tower');
+    store.start();
+
+    expect(store.getState().lane).toBe(CENTER_LANE);
+    expect(store.getState().speed).toBe(0);
+    expect(store.getState().friends).toBe(0);
+  });
+
+  it('restart from gameover replays the same game', () => {
+    const store = new GameStore();
+    store.selectGame('coneball');
+    store.start();
+    store.addScore(30);
+    store.gameOver();
+    store.start();
+    expect(store.getState().selectedGame).toBe('coneball');
+    expect(store.getState().score).toBe(0);
+  });
+
+  it('returnToMenu clears the run but keeps the selection', () => {
+    const store = new GameStore();
+    store.selectGame('tower');
+    store.start();
+    store.addScore(90);
+    store.addFriends(2);
+    store.setLane(0);
+    store.gameOver();
+
+    store.returnToMenu();
+    expect(store.getState()).toEqual({
+      status: 'menu',
+      score: 0,
+      lane: CENTER_LANE,
+      speed: 0,
+      friends: 0,
+      selectedGame: 'tower',
+    });
+  });
+
+  it('returnToMenu is refused from the menu and mid-run', () => {
+    const store = new GameStore();
+    store.returnToMenu();
+    expect(store.getState().status).toBe('menu');
+
+    store.start();
+    store.addScore(12);
+    store.returnToMenu();
+    // A live run cannot be abandoned to the menu: only gameover offers the door.
+    expect(store.getState().status).toBe('playing');
+    expect(store.getState().score).toBe(12);
+  });
+
+  it('reset() returns to the default game as well as the default state', () => {
+    const store = new GameStore();
+    store.selectGame('coneball');
+    store.reset();
+    expect(store.getState().selectedGame).toBe('highway');
+  });
+
+  it('selecting the already-selected game notifies nobody', () => {
+    const store = new GameStore();
+    const seen: string[] = [];
+    store.subscribe((s) => seen.push(s.selectedGame));
+
+    store.selectGame('tower');
+    store.selectGame('tower');
+    store.selectGame('highway');
+
+    expect(seen).toEqual(['tower', 'highway']);
   });
 
   it('notifies subscribers on transition, not on no-op setLane', () => {
