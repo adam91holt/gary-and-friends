@@ -414,8 +414,16 @@
   100% { transform: scale(1); }
 }
 
-/* Speed readout gets a little accent bar showing throttle. */
+/* Speed readout gets a little accent bar showing throttle.
+
+   Runner-specific, and gated exactly like the convoy roster below: `speed` is
+   a highway number (`GameState.speed` is documented as idling at 0 for every
+   other game), so on any other cabinet slot this dial would sit permanently
+   reading SPEED 0 — the dead instrument hud.ts explicitly says a game without
+   a number should lose rather than display. */
 #hud .speed { flex-direction: column; align-items: stretch; min-width: 148px; gap: 6px; }
+#hud .playbar .speed { display: none; }
+#hud[data-game="highway"] .playbar .speed { display: flex; }
 #hud .speed .row { display: flex; align-items: center; gap: 10px; }
 #hud .bar { height: 4px; border-radius: 999px; background: var(--hairline); overflow: hidden; }
 #hud .bar > i {

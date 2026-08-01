@@ -172,7 +172,8 @@ src/game/arcade/     pure, no three/DOM/window
 src/arcade/
   runtime.ts         the ArcadeGameRuntime contract + RuntimeRegistry
   games/highway.ts   the original runner, behind the contract, rules unchanged
-  games/{tower,coneball,royalRoll}.ts   reserved slots (real, honest placeholders)
+  games/tower.ts     Stack Attack — the timing/precision stacker
+  games/{coneball,royalRoll}.ts   reserved slots (real, honest placeholders)
 src/render/          pre-wired contracts the shell already calls
   pipeline.ts        render/resize/dispose — post-processing lands behind this
   quality.ts         device tier -> pixel-ratio / AA / post budget
@@ -259,6 +260,13 @@ goes in its own `src/ui/*Hud.ts` module, like `runnerHud.ts`.
   the world, owns distance/score/collision/near-misses/friend-collection and
   talks to the world only through store actions) and `difficulty.ts` (the speed
   ramp and score-by-distance rules as plain functions of distance travelled).
+- **Per-game simulations (pure):** `src/game/games/<id>/`. Today that is
+  `tower/` — Stack Attack: `rules.ts` (the landing/overlap/trim rule, the
+  precision window, the combo payout and the carriage speed ramp, all as plain
+  functions), `stack.ts` (`TowerGame`: the carriage, the cone in the air and the
+  stack, talking to the world only through store actions) and `snapshot.ts`
+  (`TowerSnapshot` plus the `tower:carrier` command declaration). A new game's
+  logic goes here, not into `gameplay/`, which is the highway's.
 - **Entities (pure, reusable):** `src/game/entities/` — see below.
 - **Friends (pure):** `src/game/friends/` — `roster.ts` (the five named cones as
   data: name, silhouette, hitbox, tint; indexed by `variant` on both sides of
@@ -300,7 +308,7 @@ goes in its own `src/ui/*Hud.ts` module, like `runnerHud.ts`.
   `hud.css`. A projection of the store, like the test API.
 - **Browser e2e:** `e2e/smoke.spec.ts`, `e2e/gameplay.spec.ts`,
   `e2e/friends.spec.ts`, `e2e/juice.spec.ts`, `e2e/touch.spec.ts`,
-  `e2e/state-guards.spec.ts`, `e2e/arcade-menu.spec.ts`.
+  `e2e/state-guards.spec.ts`, `e2e/arcade-menu.spec.ts`, `e2e/tower.spec.ts`.
 
 Keeping state out of the renderer is what makes the game testable both fast
 (Vitest on `GameStore`) and for real (Playwright via `__GARY__`).
