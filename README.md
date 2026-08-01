@@ -169,10 +169,15 @@ src/game/arcade/     pure, no three/DOM/window
   contracts.ts       GameId · ArcadeAction · ArcadeSnapshot · ArcadeCommandMap
   catalog.ts         the four entries: title, description, cast, controls, preview
   input.ts           key/gesture -> action mapping, and status-aware routing
+src/game/games/      pure per-game simulations (one directory each)
+  royal-roll/        Royal Roll: physics.ts · formation.ts · scoring.ts · simulation.ts
 src/arcade/
   runtime.ts         the ArcadeGameRuntime contract + RuntimeRegistry
   games/highway.ts   the original runner, behind the contract, rules unchanged
-  games/{tower,coneball,royalRoll}.ts   reserved slots (real, honest placeholders)
+  games/royalRoll.ts the aim-and-launch game (adapter only; rules live in game/)
+  games/{tower,coneball}.ts   reserved slots (real, honest placeholders)
+src/scene/games/     per-game three.js views (read the sim, decide nothing)
+  royal-roll/        lane.ts · cast.ts · aimGuide.ts · trail.ts · fx.ts · view.ts
 src/render/          pre-wired contracts the shell already calls
   pipeline.ts        render/resize/dispose — post-processing lands behind this
   quality.ts         device tier -> pixel-ratio / AA / post budget
@@ -225,6 +230,15 @@ Steps 1, 2 and 4–6 are the *only* shared-file edits, and none of them touches
 the HUD, the store, the input layer or `testApi.ts`. Game-specific telemetry
 goes in its own `src/ui/*Hud.ts` module, like `runnerHud.ts`.
 
+**Royal Roll is the worked example of a full-sized game.** Its rules are pure
+and live in `src/game/games/royal-roll/` (unit-tested in node), its meshes live
+in `src/scene/games/royal-roll/`, and `src/arcade/games/royalRoll.ts` is only
+the adapter between them and the contract. Its snapshot EXTENDS `ArcadeSnapshot`
+(`RoyalRollSnapshot` adds phase/aim/throw/roller) rather than changing it, and
+its `royal-roll:aim` test command is declared by declaration-merging from its own
+file — so landing an entire game touched no shared surface but the catalog entry
+and one registry line.
+
 ### Selection, input and per-game records
 
 - `GameState.selectedGame` is the source of truth. `selectGame(id)` is **menu
@@ -259,6 +273,14 @@ goes in its own `src/ui/*Hud.ts` module, like `runnerHud.ts`.
   the world, owns distance/score/collision/near-misses/friend-collection and
   talks to the world only through store actions) and `difficulty.ts` (the speed
   ramp and score-by-distance rules as plain functions of distance travelled).
+- **Per-game simulations (pure):** `src/game/games/<id>/` — a game whose rules
+  are too big for one file gets its own directory. `royal-roll/` is the pattern:
+  `physics.ts` (a ~120-line fixed-substep 2D disc solver — friction, barrier
+  bounce, circle/circle impulse; no physics package, no new dependency),
+  `formation.ts` (the rack as data + a seeded builder), `scoring.ts` (target
+  values, the combo multiplier, the strike bonus) and `simulation.ts` (`RoyalRoll`:
+  the aiming → rolling → settling loop, the throw budget, and the events the view
+  reacts to). Deterministic end to end: same seed and same aims, same rack.
 - **Entities (pure, reusable):** `src/game/entities/` — see below.
 - **Friends (pure):** `src/game/friends/` — `roster.ts` (the five named cones as
   data: name, silhouette, hitbox, tint; indexed by `variant` on both sides of

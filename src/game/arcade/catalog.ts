@@ -111,14 +111,14 @@ export const GAMES: readonly GameEntry[] = [
     title: 'Royal Roll',
     shortTitle: 'Royal Roll',
     description:
-      'Gary is on his side and the hill is steepening. Steer the roll, collect the crown, and try not to become a plastic pancake.',
-    cast: { gary: true, friends: [2, 3] },
+      'Ten throws down the royal roadworks. Line Gary up, roll him into the formation, and try to take the crowned one at the back with him.',
+    cast: { gary: true, friends: [2, 0, 1, 3, 4] },
     controls: [
-      { keys: '← →', action: 'Steer the roll' },
-      { keys: 'Space', action: 'Hop' },
+      { keys: '← →', action: 'Swing the aim' },
+      { keys: 'Space', action: 'Launch Gary' },
     ],
     preview: royalRollPreview,
-    playable: false,
+    playable: true,
   },
 ];
 

@@ -146,7 +146,7 @@ const highway = new HighwayRuntime({
 registry.register(highway);
 registry.register(createTowerRuntime());
 registry.register(createConeballRuntime());
-registry.register(createRoyalRollRuntime());
+registry.register(createRoyalRollRuntime({ store, audio }));
 
 /** The runtime currently on screen. Never null after the boot activation. */
 function active() {

@@ -85,10 +85,12 @@ describe('the game catalog', () => {
     expect(new Set(GAMES.map((g) => g.preview)).size).toBe(GAMES.length);
   });
 
-  it('the highway is the one playable game today', () => {
+  it('the highway and Royal Roll are the playable games today', () => {
     expect(gameEntry('highway').playable).toBe(true);
+    expect(gameEntry('royal-roll').playable).toBe(true);
     expect(GAMES.filter((g) => g.playable).map((g) => g.id)).toEqual([
       'highway',
+      'royal-roll',
     ]);
   });
 
