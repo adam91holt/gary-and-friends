@@ -158,18 +158,18 @@ test('a keyboard-only player can open a placeholder slot and come back', async (
 }) => {
   const consoleErrors = await boot(page);
 
-  // Reach Coneball with arrows alone and activate it with Space — a native
-  // <button>, so the browser's own activation fires. Crucially it must fire
-  // ONCE: if the shell also read the Space as a `primary` action we would both
-  // select the card and start a run from it.
+  // Reach the Tower — still a reserved slot — with arrows alone and activate it
+  // with Space, a native <button>, so the browser's own activation fires.
+  // Crucially it must fire ONCE: if the shell also read the Space as a `primary`
+  // action we would both select the card and start a run from it.
   await page.locator('#gcard-highway').focus();
-  await page.keyboard.press('ArrowDown');
-  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('coneball');
+  await page.keyboard.press('ArrowRight');
+  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('tower');
   await page.keyboard.press('Space');
 
-  // Coneball is a reserved slot, so it is shown but never started: the shell
+  // The Tower is a reserved slot, so it is shown but never started: the shell
   // must not fabricate a run for a game that does not exist yet.
-  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('coneball');
+  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('tower');
   expect(await page.evaluate(() => window.__GARY__?.state)).toBe('menu');
 
   // The additive legacy API must use that same launch guard; it cannot create a
@@ -187,21 +187,23 @@ test('a keyboard-only player can open a placeholder slot and come back', async (
       return { threw: true, game: window.__GARY__?.game };
     }
   });
-  expect(invalidSelection).toEqual({ threw: true, game: 'coneball' });
+  expect(invalidSelection).toEqual({ threw: true, game: 'tower' });
 
   await expect(page.locator('#startBtn')).toHaveAttribute(
     'aria-disabled',
     'true',
   );
-  await expect(page.locator('#gcard-coneball .soon')).toBeVisible();
+  await expect(page.locator('#gcard-tower .soon')).toBeVisible();
+  // ...and a slot that IS built carries no "Soon" badge.
+  await expect(page.locator('#gcard-coneball .soon')).toHaveCount(0);
 
   // Its runtime is genuinely on screen and reporting its own snapshot — the
   // placeholder entered, not merely got selected.
   expect(await page.evaluate(() => window.__GARY__?.snapshot)).toEqual({
-    game: 'coneball',
+    game: 'tower',
     score: 0,
-    entities: 3,
-    metric: { label: 'Rally', value: 0 },
+    entities: 4,
+    metric: { label: 'Height', value: 0 },
   });
 
   // The reserved slot as the player actually sees it: its own arrangement of

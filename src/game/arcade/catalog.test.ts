@@ -85,11 +85,17 @@ describe('the game catalog', () => {
     expect(new Set(GAMES.map((g) => g.preview)).size).toBe(GAMES.length);
   });
 
-  it('the highway is the one playable game today', () => {
-    expect(gameEntry('highway').playable).toBe(true);
+  it('names exactly the games that have a real runtime as playable', () => {
+    // The highway and Big Bounce are built; the tower and Royal Roll are still
+    // honest placeholders, and the menu must not promise a run it cannot give.
     expect(GAMES.filter((g) => g.playable).map((g) => g.id)).toEqual([
       'highway',
+      'coneball',
     ]);
+    expect(gameEntry('highway').playable).toBe(true);
+    expect(gameEntry('coneball').playable).toBe(true);
+    expect(gameEntry('tower').playable).toBe(false);
+    expect(gameEntry('royal-roll').playable).toBe(false);
   });
 
   it('gameEntry round-trips every id and throws on an unknown one', () => {

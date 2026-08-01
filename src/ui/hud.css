@@ -416,6 +416,11 @@
 
 /* Speed readout gets a little accent bar showing throttle. */
 #hud .speed { flex-direction: column; align-items: stretch; min-width: 148px; gap: 6px; }
+/* Speed is a HIGHWAY instrument: it reads GameState.speed, which other games
+   leave at its documented idle value of 0. Same rule as the convoy roster and
+   as `.readout.off` above — an instrument a game does not own is removed, not
+   left reading zero forever, and the bar recomposes around what is left. */
+#hud:not([data-game="highway"]) .readout.speed { display: none; }
 #hud .speed .row { display: flex; align-items: center; gap: 10px; }
 #hud .bar { height: 4px; border-radius: 999px; background: var(--hairline); overflow: hidden; }
 #hud .bar > i {

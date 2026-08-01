@@ -94,17 +94,21 @@ export const GAMES: readonly GameEntry[] = [
   },
   {
     id: 'coneball',
-    title: 'Coneball',
-    shortTitle: 'Coneball',
+    title: "Bartholocone's Big Bounce",
+    shortTitle: 'Big Bounce',
     description:
-      'Two cones, one court, one increasingly quick ball. Return every serve; the rally is the score.',
-    cast: { gary: true, friends: [1, 3] },
+      'Coneelia serves, Bartholocone swings the board. Slide left and right to keep the rally alive and smash the hazard drums hanging over the court.',
+    // Coneelia (0) serves and Bartholocone (1) holds the board. Gary sits this
+    // one out — it is the only game in the cabinet he is not in, which is
+    // exactly why the two of them get top billing on the card.
+    cast: { gary: false, friends: [0, 1] },
     controls: [
-      { keys: '↑ ↓', action: 'Move paddle' },
+      { keys: '← →', action: 'Slide the board' },
       { keys: 'Space', action: 'Serve' },
+      { keys: 'Swipe', action: 'Slide the board' },
     ],
     preview: coneballPreview,
-    playable: false,
+    playable: true,
   },
   {
     id: 'royal-roll',
