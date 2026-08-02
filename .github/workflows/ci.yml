@@ -35,10 +35,8 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # Scoped to src/: bare `bun test` also picks up the Playwright specs in
-      # e2e/, which can only run under `playwright test` (see CLAUDE.md).
       - name: Unit tests
-        run: bun test src/
+        run: bun run test
 
       - name: Lint
         run: bun run lint
