@@ -158,18 +158,21 @@ test('a keyboard-only player can open a placeholder slot and come back', async (
 }) => {
   const consoleErrors = await boot(page);
 
-  // Reach the Tower — still a reserved slot — with arrows alone and activate it
-  // with Space, a native <button>, so the browser's own activation fires.
-  // Crucially it must fire ONCE: if the shell also read the Space as a `primary`
-  // action we would both select the card and start a run from it.
+  // Reach Royal Roll — the last remaining reserved slot — with arrows alone and
+  // activate it with Space, a native <button>, so the browser's own activation
+  // fires. Crucially it must fire ONCE: if the shell also read the Space as a
+  // `primary` action we would both select the card and start a run from it.
+  // The cabinet is a 2-column grid, so reaching the far corner exercises both
+  // axes of the roving tabindex rather than just the row.
   await page.locator('#gcard-highway').focus();
   await page.keyboard.press('ArrowRight');
-  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('tower');
+  await page.keyboard.press('ArrowDown');
+  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('royal-roll');
   await page.keyboard.press('Space');
 
-  // The Tower is a reserved slot, so it is shown but never started: the shell
+  // Royal Roll is a reserved slot, so it is shown but never started: the shell
   // must not fabricate a run for a game that does not exist yet.
-  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('tower');
+  expect(await page.evaluate(() => window.__GARY__?.game)).toBe('royal-roll');
   expect(await page.evaluate(() => window.__GARY__?.state)).toBe('menu');
 
   // The additive legacy API must use that same launch guard; it cannot create a
@@ -187,23 +190,24 @@ test('a keyboard-only player can open a placeholder slot and come back', async (
       return { threw: true, game: window.__GARY__?.game };
     }
   });
-  expect(invalidSelection).toEqual({ threw: true, game: 'tower' });
+  expect(invalidSelection).toEqual({ threw: true, game: 'royal-roll' });
 
   await expect(page.locator('#startBtn')).toHaveAttribute(
     'aria-disabled',
     'true',
   );
-  await expect(page.locator('#gcard-tower .soon')).toBeVisible();
-  // ...and a slot that IS built carries no "Soon" badge.
+  await expect(page.locator('#gcard-royal-roll .soon')).toBeVisible();
+  // ...and the slots that ARE built carry no "Soon" badge.
   await expect(page.locator('#gcard-coneball .soon')).toHaveCount(0);
+  await expect(page.locator('#gcard-tower .soon')).toHaveCount(0);
 
   // Its runtime is genuinely on screen and reporting its own snapshot — the
   // placeholder entered, not merely got selected.
   expect(await page.evaluate(() => window.__GARY__?.snapshot)).toEqual({
-    game: 'tower',
+    game: 'royal-roll',
     score: 0,
     entities: 4,
-    metric: { label: 'Height', value: 0 },
+    metric: { label: 'Distance', value: 0 },
   });
 
   // The reserved slot as the player actually sees it: its own arrangement of

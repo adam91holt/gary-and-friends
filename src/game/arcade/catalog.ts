@@ -80,17 +80,19 @@ export const GAMES: readonly GameEntry[] = [
   },
   {
     id: 'tower',
-    title: 'Cone Tower',
-    shortTitle: 'Tower',
+    title: 'Stack Attack',
+    shortTitle: 'Stack',
     description:
-      'Stack the crew one on top of another and keep the pile upright as it sways. Height is the score; gravity is the opponent.',
-    cast: { gary: true, friends: [4, 1, 0] },
+      'A crane swings the crew over a growing tower. Drop them dead centre or lose the overhang — the stack only ever gets narrower.',
+    // Tiny (3) and Big Dave (4) are billed first: they are the two silhouettes
+    // the tower is built to show off, and the weighted cast bag agrees.
+    cast: { gary: true, friends: [3, 4, 1, 0] },
     controls: [
-      { keys: '← →', action: 'Line up drop' },
       { keys: 'Space', action: 'Drop a cone' },
+      { keys: 'Tap', action: 'Drop a cone' },
     ],
     preview: towerPreview,
-    playable: false,
+    playable: true,
   },
   {
     id: 'coneball',
