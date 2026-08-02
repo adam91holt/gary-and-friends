@@ -139,3 +139,8 @@ as keyboard and touch (`src/testApi.ts:307-312`, `src/main.ts:250`), and
 parks the carriage (`src/arcade/games/tower.ts:181-193`), `coneball:place` /
 `coneball:serve` set up a situation for the real rules to resolve
 (`src/arcade/games/coneball.ts:308-326`).
+
+## See also
+
+- [The game's README](../README.md) — what each cabinet game actually is, the
+  stack underneath, and the `window.__GARY__` contract this page keeps citing.
