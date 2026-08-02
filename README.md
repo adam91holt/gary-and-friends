@@ -486,3 +486,4 @@ npm run test        # unit
 npm run test:e2e    # browser
 npm run dev         # play with Gary
 ```
+Built with the factory.
