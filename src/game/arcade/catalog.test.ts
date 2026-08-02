@@ -85,13 +85,18 @@ describe('the game catalog', () => {
     expect(new Set(GAMES.map((g) => g.preview)).size).toBe(GAMES.length);
   });
 
-  it('the highway and the tower are the playable games today', () => {
-    expect(gameEntry('highway').playable).toBe(true);
-    expect(gameEntry('tower').playable).toBe(true);
+  it('names exactly the games that have a real runtime as playable', () => {
+    // The highway, Stack Attack and Big Bounce are built; Royal Roll is still
+    // an honest placeholder, and the menu must not promise a run it cannot give.
     expect(GAMES.filter((g) => g.playable).map((g) => g.id)).toEqual([
       'highway',
       'tower',
+      'coneball',
     ]);
+    expect(gameEntry('highway').playable).toBe(true);
+    expect(gameEntry('tower').playable).toBe(true);
+    expect(gameEntry('coneball').playable).toBe(true);
+    expect(gameEntry('royal-roll').playable).toBe(false);
   });
 
   it('gameEntry round-trips every id and throws on an unknown one', () => {
